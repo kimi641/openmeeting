@@ -11,3 +11,11 @@ __pycache__/
 *.pyc
 .next/
 coverage/
+
+# 运行时数据（SQLite、上传材料、备份）
+data/
+
+# 产品文档（本地保留，不入库）
+会议排程系统-PRD.md
+会议排程系统-技术方案与路线图.md
+

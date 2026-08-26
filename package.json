@@ -1,0 +1,20 @@
+{
+  "name": "meeting-scheduler",
+  "version": "0.1.0",
+  "private": true,
+  "description": "开源、可单机部署的会议设计排程系统（Monorepo）",
+  "license": "AGPL-3.0-or-later",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @meeting/server --filter @meeting/web dev",
+    "dev:server": "pnpm --filter @meeting/server dev",
+    "dev:web": "pnpm --filter @meeting/web dev",
+    "build": "pnpm --filter @meeting/shared build && pnpm --filter @meeting/web build && pnpm --filter @meeting/server build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:generate": "pnpm --filter @meeting/server db:generate"
+  }
+}
