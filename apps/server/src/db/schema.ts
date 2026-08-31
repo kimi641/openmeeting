@@ -56,6 +56,24 @@ export const venues = sqliteTable(
   (t) => [index('idx_venues_meeting').on(t.meetingId)],
 )
 
+/** 场次活动类型（会议级资源）：内置类型惰性 seed + 用户自定义 */
+export const sessionTypes = sqliteTable(
+  'session_types',
+  {
+    id: text('id').primaryKey(),
+    meetingId: text('meeting_id')
+      .notNull()
+      .references(() => meetings.id, { onDelete: 'cascade' }),
+    /** 类型 key：内置沿用 speech/panel/...（兼容存量数据），自定义用 nanoid */
+    key: text('key').notNull(),
+    name: text('name').notNull(),
+    /** 十六进制颜色（#RRGGBB） */
+    color: text('color').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+  },
+  (t) => [index('idx_session_types_meeting').on(t.meetingId)],
+)
+
 export const sessions = sqliteTable(
   'sessions',
   {
@@ -65,11 +83,8 @@ export const sessions = sqliteTable(
       .references(() => meetings.id, { onDelete: 'cascade' }),
     venueId: text('venue_id').references(() => venues.id, { onDelete: 'set null' }),
     title: text('title').notNull(),
-    type: text('type', {
-      enum: ['speech', 'panel', 'break', 'checkin', 'other'],
-    })
-      .notNull()
-      .default('other'),
+    /** 活动类型 key（session_types.key；存量内置值直接兼容） */
+    type: text('type').notNull().default('other'),
     startTime: text('start_time').notNull(),
     endTime: text('end_time').notNull(),
     description: text('description'),
@@ -130,6 +145,38 @@ export const meetingParticipants = sqliteTable('meeting_participants', {
     .references(() => participants.id, { onDelete: 'cascade' }),
   meetingRole: text('meeting_role'),
 })
+
+// ---------- 组织与主办方 ----------
+
+export const organizations = sqliteTable(
+  'organizations',
+  {
+    id: text('id').primaryKey(),
+    /** 组织是会议级资源 */
+    meetingId: text('meeting_id')
+      .notNull()
+      .references(() => meetings.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    contact: text('contact'),
+    phone: text('phone'),
+    note: text('note'),
+  },
+  (t) => [index('idx_organizations_meeting').on(t.meetingId)],
+)
+
+export const sessionOrganizers = sqliteTable(
+  'session_organizers',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+  },
+  (t) => [index('idx_organizers_organization').on(t.organizationId)],
+)
 
 // ---------- 材料 ----------
 

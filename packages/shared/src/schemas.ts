@@ -5,8 +5,26 @@ import { z } from 'zod'
 export const MeetingStatusEnum = z.enum(['draft', 'published', 'ongoing', 'finished'])
 export type MeetingStatus = z.infer<typeof MeetingStatusEnum>
 
-export const SessionTypeEnum = z.enum(['speech', 'panel', 'break', 'checkin', 'other'])
+/** 活动类型 key：内置（speech/panel/...）或自定义类型 key（session_types.key） */
+export const SessionTypeEnum = z.string().min(1).max(64)
 export type SessionType = z.infer<typeof SessionTypeEnum>
+
+const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, '颜色应为 #RRGGBB')
+
+// ---------- 活动类型 ----------
+
+export const createSessionTypeSchema = z.object({
+  name: z.string().min(1, '名称不能为空').max(50),
+  color: hexColor,
+})
+export type CreateSessionTypeInput = z.infer<typeof createSessionTypeSchema>
+
+export const updateSessionTypeSchema = z.object({
+  name: z.string().min(1).max(50).optional(),
+  color: hexColor.optional(),
+  sortOrder: z.number().int().optional(),
+})
+export type UpdateSessionTypeInput = z.infer<typeof updateSessionTypeSchema>
 
 export const SpeakerRoleEnum = z.enum(['host', 'speaker', 'panelist'])
 export type SpeakerRole = z.infer<typeof SpeakerRoleEnum>
@@ -72,6 +90,13 @@ export const createSessionSchema = z
         }),
       )
       .optional(),
+    organizers: z
+      .array(
+        z.object({
+          organizationId: z.string().min(1),
+        }),
+      )
+      .optional(),
   })
   .refine((v) => v.endTime > v.startTime, { message: '结束时间必须晚于开始时间', path: ['endTime'] })
 export type CreateSessionInput = z.infer<typeof createSessionSchema>
@@ -86,6 +111,13 @@ export const updateSessionSchema = z
     description: z.string().max(2000).nullable().optional(),
     sortOrder: z.number().int().optional(),
     crossTracks: z.boolean().optional(),
+    organizers: z
+      .array(
+        z.object({
+          organizationId: z.string().min(1),
+        }),
+      )
+      .optional(),
   })
   .refine((v) => {
     if (v.startTime && v.endTime) return v.endTime > v.startTime
@@ -123,6 +155,30 @@ export const reorderVenuesSchema = z.object({
 })
 export type ReorderVenuesInput = z.infer<typeof reorderVenuesSchema>
 
+// ---------- 组织（会议级资源） ----------
+
+export const organizationSchema = z.object({
+  id: z.string(),
+  meetingId: z.string(),
+  name: z.string(),
+  contact: z.string().nullable(),
+  phone: z.string().nullable(),
+  note: z.string().nullable(),
+})
+export type Organization = z.infer<typeof organizationSchema>
+
+export const createOrganizationSchema = z.object({
+  meetingId: z.string().min(1, '缺少会议 ID'),
+  name: z.string().trim().min(1, '组织名称不能为空').max(200),
+  contact: z.string().max(100).nullish(),
+  phone: z.string().max(50).nullish(),
+  note: z.string().max(500).nullish(),
+})
+export type CreateOrganizationInput = z.infer<typeof createOrganizationSchema>
+
+export const updateOrganizationSchema = createOrganizationSchema.partial()
+export type UpdateOrganizationInput = z.infer<typeof updateOrganizationSchema>
+
 // ---------- 人员（会议级资源） ----------
 
 export const createParticipantSchema = z.object({
@@ -153,6 +209,13 @@ export const updateSpeakerSchema = z.object({
   confirmStatus: ConfirmStatusEnum.optional(),
 })
 export type UpdateSpeakerInput = z.infer<typeof updateSpeakerSchema>
+
+// ---------- 场次主办方 ----------
+
+export const createSessionOrganizerSchema = z.object({
+  organizationId: z.string().min(1),
+})
+export type CreateSessionOrganizerInput = z.infer<typeof createSessionOrganizerSchema>
 
 // ---------- 会议参会人 ----------
 

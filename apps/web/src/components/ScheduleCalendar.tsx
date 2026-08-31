@@ -1,21 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Meeting, Session, Speaker, Venue } from '../lib/api'
+import type { Meeting, Session, SessionOrganizer, SessionType, Speaker, Venue } from '../lib/api'
 import { Button } from './ui/button'
-import { SESSION_TYPE, formatTime } from '../lib/utils'
+import { DEFAULT_SESSION_TYPE, SESSION_TYPE, formatTime, typeStyle } from '../lib/utils'
 
 const HOUR_H = 56
 const TIME_COL_W = 52
 const SNAP = 15 // 吸附粒度（分钟）
 const MIN_DURATION = 15 // 最短时长（分钟）
 const MOVE_THRESHOLD_PX = 4 // 超过该位移视为拖拽（否则视为点击）
-/** 场次块配色（按类型） */
-const SESSION_BLOCK: Record<string, string> = {
-  speech: 'bg-blue-50 border-blue-400 text-blue-900 hover:bg-blue-100',
-  panel: 'bg-purple-50 border-purple-400 text-purple-900 hover:bg-purple-100',
-  break: 'bg-amber-50 border-amber-400 text-amber-900 hover:bg-amber-100',
-  checkin: 'bg-teal-50 border-teal-400 text-teal-900 hover:bg-teal-100',
-  other: 'bg-gray-50 border-gray-400 text-gray-900 hover:bg-gray-100',
-}
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const fmtMin = (m: number) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`
@@ -99,6 +91,10 @@ interface ScheduleCalendarProps {
   venues: Venue[]
   sessions: Session[]
   speakersBySession: Record<string, Speaker[]>
+  /** 各场次的主办方（日历块上展示，带"主办："前缀） */
+  organizersBySession: Record<string, SessionOrganizer[]>
+  /** 活动类型（含自定义，用于场次块配色与标签） */
+  sessionTypes: SessionType[]
   /** 有冲突的场次 ID 集合（红色描边标记） */
   conflictSessionIds: Set<string>
   onAddSession: (venueId: string | null, date: string, minutes: number) => void
@@ -116,6 +112,8 @@ export function ScheduleCalendar({
   venues,
   sessions,
   speakersBySession,
+  organizersBySession,
+  sessionTypes,
   conflictSessionIds,
   onAddSession,
   onEditSession,
@@ -128,6 +126,14 @@ export function ScheduleCalendar({
   const days = useMemo(() => eachDate(meeting.startDate, meeting.endDate), [meeting])
   const [dayIdx, setDayIdx] = useState(0)
   const day = days[dayIdx] ?? days[0] ?? ''
+
+  // 类型 key → 颜色/名称（自定义类型优先，未覆盖的回退内置默认）
+  const typeMap = useMemo(() => {
+    const m: Record<string, { label: string; color: string }> = {}
+    for (const [k, v] of Object.entries(SESSION_TYPE)) m[k] = v
+    for (const t of sessionTypes) m[t.key] = { label: t.name, color: t.color }
+    return m
+  }, [sessionTypes])
 
   // 隐藏的场地列（按天分开，持久化到 localStorage）
   const [hiddenVenueIds, setHiddenVenueIds] = useState<string[]>(() =>
@@ -565,7 +571,9 @@ export function ScheduleCalendar({
                           session={s}
                           startMin={startMin}
                           speakers={speakersBySession[s.id] ?? []}
+                          organizers={organizersBySession[s.id] ?? []}
                           conflicted={conflictSessionIds.has(s.id)}
+                          typeMap={typeMap}
                           onBeginDrag={(e, mode) => beginDrag(s, e, mode)}
                         />
                       ),
@@ -589,7 +597,9 @@ export function ScheduleCalendar({
                       session={s}
                       startMin={startMin}
                       speakers={speakersBySession[s.id] ?? []}
+                      organizers={organizersBySession[s.id] ?? []}
                       conflicted={conflictSessionIds.has(s.id)}
+                      typeMap={typeMap}
                       cross
                       onBeginDrag={(e, mode) => beginDrag(s, e, mode)}
                     />
@@ -649,29 +659,41 @@ function SessionBlock({
   session,
   startMin,
   speakers,
+  organizers,
   conflicted,
+  typeMap,
   cross,
   onBeginDrag,
 }: {
   session: Session
   startMin: number
   speakers: Speaker[]
+  organizers: SessionOrganizer[]
   conflicted: boolean
+  typeMap: Record<string, { label: string; color: string }>
   cross?: boolean
   onBeginDrag: (e: React.PointerEvent, mode: 'move' | 'resize') => void
 }) {
   const top = ((minutesOf(session.startTime) - startMin) / 60) * HOUR_H
   const rawH = ((minutesOf(session.endTime) - minutesOf(session.startTime)) / 60) * HOUR_H
   const height = Math.max(rawH, 22)
-  const typeMeta = SESSION_TYPE[session.type]
+  const typeMeta = typeMap[session.type]
+  const organizerText = organizers.map((o) => o.organizationName).join('、')
 
   return (
     <div
-      className={`group pointer-events-auto absolute cursor-grab overflow-hidden rounded-md border-l-4 px-2 py-1 text-left shadow-sm transition-colors active:cursor-grabbing ${
-        SESSION_BLOCK[session.type] ?? SESSION_BLOCK.other
-      } ${conflicted ? 'ring-2 ring-red-400' : ''}`}
-      style={{ top, height, ...(cross ? { left: 8, right: 8 } : { left: 4, right: 4 }) }}
+      className={`group pointer-events-auto absolute cursor-grab overflow-hidden rounded-md px-2 py-1 text-left shadow-sm transition-colors active:cursor-grabbing ${
+        conflicted ? 'ring-2 ring-red-400' : ''
+      }`}
+      style={{
+        top,
+        height,
+        ...(cross ? { left: 8, right: 8 } : { left: 4, right: 4 }),
+        ...typeStyle(typeMeta?.color ?? DEFAULT_SESSION_TYPE.color),
+      }}
       title={`${formatTime(session.startTime)}–${formatTime(session.endTime)} ${session.title}${
+        organizerText ? ` · 主办：${organizerText}` : ''
+      }${
         speakers.length > 0 ? ` · ${speakers.map((sp) => sp.participantName).join('、')}` : ''
       }${conflicted ? '（存在冲突）' : ''}（点击编辑）`}
       onPointerDown={(e) => onBeginDrag(e, 'move')}
@@ -684,6 +706,9 @@ function SessionBlock({
         <div className="truncate text-[11px] opacity-70">
           {formatTime(session.startTime)}–{formatTime(session.endTime)}
         </div>
+      )}
+      {height >= 52 && organizerText && (
+        <div className="truncate text-[11px] opacity-70">主办：{organizerText}</div>
       )}
       {height >= 52 && speakers.length > 0 && (
         <div className="truncate text-[11px] opacity-70">

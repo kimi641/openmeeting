@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, type ListResult, type Meeting, type Session, type Speaker, type Venue } from '../lib/api'
-import { SESSION_TYPE, getHiddenVenueMap } from '../lib/utils'
+import { api, type ListResult, type Meeting, type Session, type SessionOrganizer, type SessionType, type Speaker, type Venue } from '../lib/api'
+import { DEFAULT_SESSION_TYPE, SESSION_TYPE, getHiddenVenueMap } from '../lib/utils'
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 
@@ -25,23 +25,28 @@ const ROLE_LABEL: Record<string, string> = {
   panelist: '圆桌嘉宾',
 }
 
-/** 单元格内容：标题 + 第二行副标题（类型 · 嘉宾） */
+/** 单元格内容：标题 + 第二行副标题（类型 · 主办方 · 嘉宾） */
 function CellContent({
   title,
   type,
+  typeMap,
+  organizers,
   speakers,
   cross,
 }: {
   title: string
   type: string
+  typeMap: Record<string, { label: string; color: string }>
+  organizers: SessionOrganizer[]
   speakers: Speaker[]
   cross?: boolean
 }) {
-  const typeInfo = SESSION_TYPE[type] ?? { label: '其他' }
+  const typeInfo = typeMap[type] ?? SESSION_TYPE.other ?? DEFAULT_SESSION_TYPE
+  const organizerText = organizers.length > 0 ? `主办：${organizers.map((o) => o.organizationName).join('、')}` : ''
   const speakerText = speakers
     .map((sp) => `${sp.participantName}（${ROLE_LABEL[sp.role] ?? sp.role}）`)
     .join('、')
-  const subtitle = [typeInfo.label, speakerText].filter(Boolean).join(' · ')
+  const subtitle = [typeInfo.label, organizerText, speakerText].filter(Boolean).join(' · ')
   return (
     <>
       <div className="font-semibold text-gray-900">
@@ -60,6 +65,8 @@ export function PrintSchedulePage() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [venues, setVenues] = useState<Venue[]>([])
   const [speakersBySession, setSpeakersBySession] = useState<Record<string, Speaker[]>>({})
+  const [organizersBySession, setOrganizersBySession] = useState<Record<string, SessionOrganizer[]>>({})
+  const [sessionTypes, setSessionTypes] = useState<SessionType[]>([])
   const [notFound, setNotFound] = useState(false)
   const [ready, setReady] = useState(false)
 
@@ -69,14 +76,16 @@ export function PrintSchedulePage() {
     ;(async () => {
       try {
         const m = await api.get<Meeting>(`/meetings/${id}`)
-        const [venueRes, sessionRes] = await Promise.all([
+        const [venueRes, sessionRes, typeRes] = await Promise.all([
           api.get<ListResult<Venue>>(`/venues?meetingId=${id}`),
           api.get<ListResult<Session>>(`/sessions?meetingId=${id}`),
+          api.get<ListResult<SessionType>>(`/session-types?meetingId=${id}`).catch(() => ({ data: [] as SessionType[] })),
         ])
         if (cancelled) return
         setMeeting(m)
         setVenues(venueRes.data)
         setSessions(sessionRes.data)
+        setSessionTypes(typeRes.data)
 
         const speakerLists = await Promise.all(
           sessionRes.data.map((s) =>
@@ -89,6 +98,21 @@ export function PrintSchedulePage() {
           bySession[s.id] = speakerLists[i]?.data ?? []
         })
         setSpeakersBySession(bySession)
+
+        // 各场次的主办方（打印页副标题展示）
+        const organizerLists = await Promise.all(
+          sessionRes.data.map((s) =>
+            api
+              .get<ListResult<SessionOrganizer>>(`/sessions/${s.id}/organizers`)
+              .catch(() => ({ data: [] as SessionOrganizer[] })),
+          ),
+        )
+        if (cancelled) return
+        const organizersBySession: Record<string, SessionOrganizer[]> = {}
+        sessionRes.data.forEach((s, i) => {
+          organizersBySession[s.id] = organizerLists[i]?.data ?? []
+        })
+        setOrganizersBySession(organizersBySession)
         setReady(true)
       } catch {
         if (!cancelled) setNotFound(true)
@@ -111,6 +135,14 @@ export function PrintSchedulePage() {
 
   // 日历中隐藏的场地（localStorage 按天存储，按天应用，不影响其他日期的日程）
   const hiddenMap = useMemo(() => (id ? getHiddenVenueMap(id) : {}), [id])
+
+  // 类型 key → 名称/颜色（自定义优先，内置回退）
+  const typeMap = useMemo(() => {
+    const m: Record<string, { label: string; color: string }> = {}
+    for (const [k, v] of Object.entries(SESSION_TYPE)) m[k] = v
+    for (const t of sessionTypes) m[t.key] = { label: t.name, color: t.color }
+    return m
+  }, [sessionTypes])
 
   // 按日期分组（升序），组内提取去重时间段（纵轴行，按开始时间排序）；
   // 每天的场地列 = 当天有场次的场地 − 当天被隐藏的场地（与日历页面所见一致）；
@@ -256,6 +288,8 @@ export function PrintSchedulePage() {
                               <CellContent
                                 title={cross.title}
                                 type={cross.type}
+                                typeMap={typeMap}
+                                organizers={organizersBySession[cross.id] ?? []}
                                 speakers={speakersBySession[cross.id] ?? []}
                                 cross
                               />
@@ -272,6 +306,8 @@ export function PrintSchedulePage() {
                                     <CellContent
                                       title={s.title}
                                       type={s.type}
+                                      typeMap={typeMap}
+                                      organizers={organizersBySession[s.id] ?? []}
                                       speakers={speakersBySession[s.id] ?? []}
                                     />
                                   ) : null}

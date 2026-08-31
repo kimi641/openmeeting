@@ -5,8 +5,11 @@ import {
   type Conflict,
   type ListResult,
   type Meeting,
+  type Organization,
   type Participant,
   type Session,
+  type SessionOrganizer,
+  type SessionType,
   type Speaker,
   type Venue,
 } from '../lib/api'
@@ -16,6 +19,7 @@ import { Dialog, DialogFooter } from '../components/ui/dialog'
 import { MultiSelect } from '../components/ui/MultiSelect'
 import { Field, Input, Select, Textarea } from '../components/ui/form'
 import { ScheduleCalendar } from '../components/ScheduleCalendar'
+import { useOrganizations, useSessionTypes } from '../lib/hooks'
 import {
   MEETING_STATUS,
   SESSION_TYPE,
@@ -35,8 +39,11 @@ export function MeetingDetailPage() {
   const [venues, setVenues] = useState<Venue[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
   const [speakersBySession, setSpeakersBySession] = useState<Record<string, Speaker[]>>({})
+  const [organizersBySession, setOrganizersBySession] = useState<Record<string, SessionOrganizer[]>>({})
   const [conflicts, setConflicts] = useState<Conflict[]>([])
   const [participants, setParticipants] = useState<Participant[]>([])
+  const { types: sessionTypes, reload: reloadSessionTypes } = useSessionTypes(id)
+  const { types: organizations, reload: reloadOrganizations } = useOrganizations(id)
   const [loading, setLoading] = useState(true)
   const [notFound_, setNotFound] = useState(false)
 
@@ -73,6 +80,20 @@ export function MeetingDetailPage() {
         bySession[s.id] = speakerLists[i]?.data ?? []
       })
       setSpeakersBySession(bySession)
+
+      // 各场次的主办方（日历块上展示）
+      const organizerLists = await Promise.all(
+        sessionRes.data.map((s) =>
+          api
+            .get<ListResult<SessionOrganizer>>(`/sessions/${s.id}/organizers`)
+            .catch(() => ({ data: [] as SessionOrganizer[] })),
+        ),
+      )
+      const organizersBySession: Record<string, SessionOrganizer[]> = {}
+      sessionRes.data.forEach((s, i) => {
+        organizersBySession[s.id] = organizerLists[i]?.data ?? []
+      })
+      setOrganizersBySession(organizersBySession)
 
       const cf = await api.get<ListResult<Conflict>>(`/meetings/${id}/conflicts`)
       setConflicts(cf.data)
@@ -266,6 +287,8 @@ export function MeetingDetailPage() {
         venues={venues}
         sessions={sessions}
         speakersBySession={speakersBySession}
+        organizersBySession={organizersBySession}
+        sessionTypes={sessionTypes}
         conflictSessionIds={conflictSessionIds}
         onAddSession={(venueId, date, minutes) =>
           setSessionDialog({ open: true, venueId, session: null, defaults: { date, startMinutes: minutes } })
@@ -309,7 +332,10 @@ export function MeetingDetailPage() {
         meetingId={meeting.id}
         venues={venues}
         participants={participants}
+        organizations={organizations}
+        sessionTypes={sessionTypes}
         onParticipantCreated={(p) => setParticipants((prev) => [...prev, p])}
+        onOrganizationCreated={() => void reloadOrganizations()}
         onRemove={(s) => void removeSession(s)}
         onClose={() => setSessionDialog({ open: false, venueId: null, session: null })}
         onSaved={() => {
@@ -500,7 +526,10 @@ function SessionDialog({
   meetingId,
   venues,
   participants,
+  organizations,
+  sessionTypes,
   onParticipantCreated,
+  onOrganizationCreated,
   onRemove,
   onClose,
   onSaved,
@@ -512,13 +541,16 @@ function SessionDialog({
   meetingId: string
   venues: Venue[]
   participants: Participant[]
+  organizations: Organization[]
+  sessionTypes: SessionType[]
   onParticipantCreated: (p: Participant) => void
+  onOrganizationCreated: (o: Organization) => void
   onRemove: (session: Session) => void
   onClose: () => void
   onSaved: () => void
 }) {
   const [title, setTitle] = useState('')
-  const [type, setType] = useState<Session['type']>('speech')
+  const [type, setType] = useState<string>('speech')
   const [startTime, setStartTime] = useState('')
   const [endTime, setEndTime] = useState('')
   const [description, setDescription] = useState('')
@@ -533,6 +565,12 @@ function SessionDialog({
   const [removedSpeakerIds, setRemovedSpeakerIds] = useState<string[]>([])
   const [addPids, setAddPids] = useState<string[]>([])
   const [addRole, setAddRole] = useState<Speaker['role']>('speaker')
+  // 新建时本地暂存的主办方组织 ID；编辑时 = 已有主办方 + 新增（保存时 diff 同步）
+  const [newOrganizers, setNewOrganizers] = useState<string[]>([])
+  // 编辑态：打开弹窗时场次的已有主办方（含 sessionOrganizer 记录 ID，用于移除时调删除接口）
+  const [initialOrganizers, setInitialOrganizers] = useState<{ id: string; organizationId: string }[]>([])
+  const [removedOrganizerIds, setRemovedOrganizerIds] = useState<string[]>([])
+  const [addOrgIds, setAddOrgIds] = useState<string[]>([])
   // 内联新增人员
   const [creating, setCreating] = useState(false)
   const [npName, setNpName] = useState('')
@@ -540,6 +578,13 @@ function SessionDialog({
   const [npTitle, setNpTitle] = useState('')
   const [npError, setNpError] = useState('')
   const [npLoading, setNpLoading] = useState(false)
+  // 内联新增组织
+  const [creatingOrg, setCreatingOrg] = useState(false)
+  const [noName, setNoName] = useState('')
+  const [noContact, setNoContact] = useState('')
+  const [noNote, setNoNote] = useState('')
+  const [noError, setNoError] = useState('')
+  const [noLoading, setNoLoading] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -555,6 +600,10 @@ function SessionDialog({
       setRemovedSpeakerIds([])
       setAddPids([])
       setAddRole('speaker')
+      setNewOrganizers([])
+      setInitialOrganizers([])
+      setRemovedOrganizerIds([])
+      setAddOrgIds([])
       // 编辑态：加载场次的已有嘉宾，回显到嘉宾列表（与日历显示同步）
       if (session) {
         api
@@ -564,12 +613,25 @@ function SessionDialog({
             setInitialSpeakers(r.data.map((sp) => ({ id: sp.id, participantId: sp.participantId, role: sp.role })))
           })
           .catch(() => {})
+        // 编辑态：加载场次的已有主办方，回显到主办方列表
+        api
+          .get<{ data: SessionOrganizer[] }>(`/sessions/${session.id}/organizers`)
+          .then((r) => {
+            setNewOrganizers(r.data.map((o) => o.organizationId))
+            setInitialOrganizers(r.data.map((o) => ({ id: o.id, organizationId: o.organizationId })))
+          })
+          .catch(() => {})
       }
       setCreating(false)
       setNpName('')
       setNpOrg('')
       setNpTitle('')
       setNpError('')
+      setCreatingOrg(false)
+      setNoName('')
+      setNoContact('')
+      setNoNote('')
+      setNoError('')
       setError('')
       if (session) {
         setStartTime(toLocalInputValue(session.startTime))
@@ -626,6 +688,44 @@ function SessionDialog({
     }
   }
 
+  function addLocalOrganizers() {
+    const adds = addOrgIds.filter((oid) => !newOrganizers.includes(oid))
+    if (adds.length > 0) {
+      setNewOrganizers([...newOrganizers, ...adds])
+    }
+    setAddOrgIds([])
+  }
+
+  /** 内联创建组织并直接加入主办方暂存列表 */
+  async function createOrganizationAndAdd() {
+    if (!noName.trim()) {
+      setNoError('请填写组织名称')
+      return
+    }
+    setNoLoading(true)
+    setNoError('')
+    try {
+      const o = await api.post<Organization>('/organizations', {
+        meetingId,
+        name: noName.trim(),
+        contact: noContact.trim() || null,
+        note: noNote.trim() || null,
+      })
+      onOrganizationCreated(o)
+      if (!newOrganizers.includes(o.id)) {
+        setNewOrganizers([...newOrganizers, o.id])
+      }
+      setCreatingOrg(false)
+      setNoName('')
+      setNoContact('')
+      setNoNote('')
+    } catch (err) {
+      setNoError(err instanceof Error ? err.message : '创建失败')
+    } finally {
+      setNoLoading(false)
+    }
+  }
+
   async function submit() {
     if (!title.trim() || !startTime || !endTime) {
       setError('请填写标题与起止时间')
@@ -659,6 +759,15 @@ function SessionDialog({
         for (const speakerId of removedSpeakerIds) {
           await api.delete(`/session-speakers/${speakerId}`).catch(() => {})
         }
+        // 编辑态：diff 同步主办方 —— 新增的挂接，移除的解绑
+        for (const organizationId of newOrganizers) {
+          if (!initialOrganizers.some((x) => x.organizationId === organizationId)) {
+            await api.post(`/sessions/${session.id}/organizers`, { organizationId }).catch(() => {})
+          }
+        }
+        for (const organizerId of removedOrganizerIds) {
+          await api.delete(`/session-organizers/${organizerId}`).catch(() => {})
+        }
       } else {
         await api.post('/sessions', {
           meetingId,
@@ -670,6 +779,7 @@ function SessionDialog({
           description: description || null,
           crossTracks,
           speakers: newSpeakers,
+          organizers: newOrganizers.map((organizationId) => ({ organizationId })),
         })
       }
       onSaved()
@@ -681,6 +791,7 @@ function SessionDialog({
   }
 
   const pidName = (pid: string) => participants.find((p) => p.id === pid)?.name ?? pid
+  const orgName = (oid: string) => organizations.find((o) => o.id === oid)?.name ?? oid
 
   return (
     <Dialog
@@ -716,10 +827,13 @@ function SessionDialog({
             </Field>
           </div>
           <Field label="类型">
-            <Select value={type} onChange={(e) => setType(e.target.value as Session['type'])}>
-              {Object.entries(SESSION_TYPE).map(([v, meta]) => (
-                <option key={v} value={v}>
-                  {meta.label}
+            <Select value={type} onChange={(e) => setType(e.target.value)}>
+              {(sessionTypes.length > 0
+                ? sessionTypes.map((t) => ({ key: t.key, name: t.name, color: t.color }))
+                : Object.entries(SESSION_TYPE).map(([k, v]) => ({ key: k, name: v.label, color: v.color }))
+              ).map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.name}
                 </option>
               ))}
             </Select>
@@ -757,6 +871,91 @@ function SessionDialog({
           />
           全场环节（横跨所有场地，如签到/茶歇）
         </label>
+
+        <Field label="主办方" hint="下拉可搜索、多重勾选组织，可新增；保存后生效">
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <MultiSelect
+                value={addOrgIds}
+                onChange={setAddOrgIds}
+                options={organizations.map((o) => ({ value: o.id, label: o.name }))}
+                placeholder="选择组织…"
+                searchPlaceholder="搜索组织名称…"
+                footer="＋ 新增组织…"
+                onFooterClick={() => setCreatingOrg(true)}
+              />
+            </div>
+            <Button variant="outline" onClick={addLocalOrganizers} disabled={addOrgIds.length === 0} className="shrink-0">
+              添加
+            </Button>
+          </div>
+          {creatingOrg && (
+            <div className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-3">
+              <div className="mb-2 text-xs font-medium text-gray-600">新增组织（将同时加入组织库）</div>
+              <div className="grid grid-cols-3 gap-2">
+                <Input
+                  placeholder="名称 *"
+                  value={noName}
+                  onChange={(e) => setNoName(e.target.value)}
+                  className="h-8 text-sm"
+                  autoFocus
+                />
+                <Input
+                  placeholder="联系人（选填）"
+                  value={noContact}
+                  onChange={(e) => setNoContact(e.target.value)}
+                  className="h-8 text-sm"
+                />
+                <Input
+                  placeholder="备注（选填）"
+                  value={noNote}
+                  onChange={(e) => setNoNote(e.target.value)}
+                  className="h-8 text-sm"
+                />
+              </div>
+              {noError && <div className="mt-1.5 text-xs text-red-600">{noError}</div>}
+              <div className="mt-2 flex justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setCreatingOrg(false)
+                    setNoError('')
+                  }}
+                >
+                  取消
+                </Button>
+                <Button size="sm" onClick={() => void createOrganizationAndAdd()} disabled={noLoading}>
+                  {noLoading ? '创建中…' : '创建并添加'}
+                </Button>
+              </div>
+            </div>
+          )}
+          {newOrganizers.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {newOrganizers.map((oid, i) => (
+                <span
+                  key={oid}
+                  className="inline-flex items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600"
+                >
+                  {orgName(oid)}
+                  <button
+                    className="text-gray-400 hover:text-red-600 cursor-pointer"
+                    onClick={() => {
+                      const removed = newOrganizers[i]
+                      if (!removed) return
+                      const rec = initialOrganizers.find((x) => x.organizationId === removed)
+                      if (rec) setRemovedOrganizerIds((prev) => [...prev, rec.id])
+                      setNewOrganizers(newOrganizers.filter((_, j) => j !== i))
+                    }}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </Field>
 
         <Field label="嘉宾" hint="下拉可搜索、多重勾选人员，可新增；保存后生效">
           <div className="flex gap-2">
