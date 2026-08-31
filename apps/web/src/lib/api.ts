@@ -65,12 +65,24 @@ export interface Session {
   meetingId: string
   venueId: string | null
   title: string
-  type: 'speech' | 'panel' | 'break' | 'checkin' | 'other'
+  /** 活动类型 key（内置 speech/panel/... 或自定义类型 key） */
+  type: string
   startTime: string
   endTime: string
   description: string | null
   sortOrder: number
   crossTracks: boolean
+}
+
+/** 场次活动类型（会议级资源，可自定义名称/颜色） */
+export interface SessionType {
+  id: string
+  meetingId: string
+  key: string
+  name: string
+  /** 十六进制颜色（#RRGGBB） */
+  color: string
+  sortOrder: number
 }
 
 export interface Speaker {

@@ -1,13 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { api, type ListResult, type Meeting, type Participant, type Session, type Venue } from '../lib/api'
+import {
+  api,
+  type ListResult,
+  type Meeting,
+  type Participant,
+  type Session,
+  type SessionType,
+  type Speaker,
+  type Venue,
+} from '../lib/api'
 import { Button } from './ui/button'
 import { Input } from './ui/form'
-import { cn, formatTime, SESSION_TYPE } from '../lib/utils'
+import { cn, DEFAULT_SESSION_TYPE, formatTime, SESSION_TYPE, SPEAKER_ROLE, typeTagStyle } from '../lib/utils'
+import { useSessionTypes } from '../lib/hooks'
 import { ParticipantDialog } from './dialogs/ParticipantDialog'
 import { VenueDialog } from './dialogs/VenueDialog'
+import { SessionTypeDialog } from './dialogs/SessionTypeDialog'
 
-type Tab = 'schedule' | 'people' | 'venues'
+type Tab = 'schedule' | 'activities' | 'people' | 'venues'
 
 /** 从当前路由提取会议 ID */
 function useMeetingId(): string | null {
@@ -41,10 +52,11 @@ export function RightPanel({ collapsed, onToggle }: RightPanelProps) {
 
   const ICONS: Record<Tab, string> = {
     schedule: 'M4 5h16v13H4zM8 3v4M16 3v4M4 9h16',
+    activities: 'M4 6h7v5H4zM13 6h7v5h-7zM4 13h7v5H4zM13 13h7v5h-7z',
     people: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1M16 3.5a4 4 0 0 1 0 7M22 21v-1a5 5 0 0 0-3.5-4.8',
     venues: 'M3 21V8l9-5 9 5v13M9 21v-6h6v6',
   }
-  const LABELS: Record<Tab, string> = { schedule: '日程', people: '人员', venues: '场地' }
+  const LABELS: Record<Tab, string> = { schedule: '日程', activities: '活动', people: '人员', venues: '场地' }
 
   return (
     <aside className="flex w-80 shrink-0 border-l border-gray-200 bg-white">
@@ -80,6 +92,7 @@ export function RightPanel({ collapsed, onToggle }: RightPanelProps) {
       {/* 内容区 */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {tab === 'schedule' && <ScheduleTab meetingId={meetingId} />}
+        {tab === 'activities' && <ActivitiesTab meetingId={meetingId} />}
         {tab === 'people' && <PeopleTab meetingId={meetingId} />}
         {tab === 'venues' && <VenuesTab meetingId={meetingId} />}
       </div>
@@ -93,6 +106,7 @@ function ScheduleTab({ meetingId }: { meetingId: string | null }) {
   const [sessions, setSessions] = useState<Session[]>([])
   const [venues, setVenues] = useState<Venue[]>([])
   const [loading, setLoading] = useState(false)
+  const { types: sessionTypes } = useSessionTypes(meetingId)
 
   useEffect(() => {
     if (!meetingId) {
@@ -134,6 +148,15 @@ function ScheduleTab({ meetingId }: { meetingId: string | null }) {
     for (const v of venues) m[v.id] = v
     return m
   }, [venues])
+
+  // 类型 key → 颜色/名称（自定义优先，内置回退）
+  const typeMap = useMemo(() => {
+    const m: Record<string, { label: string; color: string }> = {}
+    for (const [k, v] of Object.entries(SESSION_TYPE)) m[k] = v
+    for (const t of sessionTypes) m[t.key] = { label: t.name, color: t.color }
+    return m
+  }, [sessionTypes])
+  const fallbackType = SESSION_TYPE.other ?? DEFAULT_SESSION_TYPE
 
   // 按日期分组（仅会议日期范围内的场次，与主日历一致）
   const dayGroups = useMemo(() => {
@@ -178,7 +201,7 @@ function ScheduleTab({ meetingId }: { meetingId: string | null }) {
           <div className="space-y-1">
             {g.items.map((s) => {
               const venue = s.venueId ? venueMap[s.venueId] : null
-              const typeInfo = SESSION_TYPE[s.type] ?? { label: '其他', className: 'bg-gray-50 text-gray-700 border-gray-200' }
+              const typeInfo = typeMap[s.type] ?? DEFAULT_SESSION_TYPE
               return (
                 <div
                   key={s.id}
@@ -195,10 +218,8 @@ function ScheduleTab({ meetingId }: { meetingId: string | null }) {
                   </div>
                   <div className="mt-0.5 flex items-center gap-1.5">
                     <span
-                      className={cn(
-                        'rounded border px-1 py-0.5 text-[10px]',
-                        typeInfo.className,
-                      )}
+                      className="rounded border px-1 py-0.5 text-[10px]"
+                      style={typeTagStyle(typeInfo.color)}
                     >
                       {typeInfo.label}
                     </span>
@@ -210,6 +231,247 @@ function ScheduleTab({ meetingId }: { meetingId: string | null }) {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+// ==================== 活动（类型） Tab ====================
+
+function ActivitiesTab({ meetingId }: { meetingId: string | null }) {
+  const { types, reload } = useSessionTypes(meetingId)
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [venues, setVenues] = useState<Venue[]>([])
+  const [loading, setLoading] = useState(false)
+  const [dateRange, setDateRange] = useState<[string, string] | null>(null)
+  const [expanded, setExpanded] = useState<string | null>(null) // 展开的类型 key
+  const [speakersBySession, setSpeakersBySession] = useState<Record<string, Speaker[]>>({})
+  const [dialog, setDialog] = useState<{ open: boolean; type: SessionType | null }>({
+    open: false,
+    type: null,
+  })
+  const [error, setError] = useState('')
+  // 行内改色的暂存值（离开色块才提交，避免连续触发请求）
+  const [pendingColor, setPendingColor] = useState<{ key: string; color: string } | null>(null)
+
+  useEffect(() => {
+    if (!meetingId) {
+      setSessions([])
+      setVenues([])
+      return
+    }
+    setLoading(true)
+    Promise.all([
+      api.get<ListResult<Session>>(`/sessions?meetingId=${meetingId}`),
+      api.get<ListResult<Venue>>(`/venues?meetingId=${meetingId}`),
+      api.get<Meeting>(`/meetings/${meetingId}`),
+    ])
+      .then(([s, v, m]) => {
+        setSessions(s.data)
+        setVenues(v.data)
+        setDateRange([m.startDate, m.endDate])
+      })
+      .catch(() => {
+        setSessions([])
+        setVenues([])
+        setDateRange(null)
+      })
+      .finally(() => setLoading(false))
+  }, [meetingId])
+
+  const venueMap = useMemo(() => {
+    const m: Record<string, Venue> = {}
+    for (const v of venues) m[v.id] = v
+    return m
+  }, [venues])
+
+  // 按类型分组（仅会议日期范围内的场次，与日程 Tab 一致）
+  const byType = useMemo(() => {
+    const map: Record<string, Session[]> = {}
+    for (const s of sessions) {
+      const d = new Date(s.startTime)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      if (dateRange && (key < dateRange[0] || key > dateRange[1])) continue
+      ;(map[s.type] ??= []).push(s)
+    }
+    for (const list of Object.values(map)) {
+      list.sort((a, b) => a.startTime.localeCompare(b.startTime))
+    }
+    return map
+  }, [sessions, dateRange])
+
+  /** 展开某类型时按需加载其场次的嘉宾（缓存） */
+  async function loadSpeakersFor(list: Session[]) {
+    const missing = list.filter((s) => !speakersBySession[s.id])
+    if (missing.length === 0) return
+    const results = await Promise.all(
+      missing.map((s) =>
+        api.get<ListResult<Speaker>>(`/sessions/${s.id}/speakers`).catch(() => ({ data: [] as Speaker[] })),
+      ),
+    )
+    setSpeakersBySession((prev) => {
+      const next = { ...prev }
+      missing.forEach((s, i) => {
+        next[s.id] = results[i]?.data ?? []
+      })
+      return next
+    })
+  }
+
+  function toggleType(t: SessionType) {
+    if (expanded === t.key) {
+      setExpanded(null)
+      return
+    }
+    setExpanded(t.key)
+    void loadSpeakersFor(byType[t.key] ?? [])
+  }
+
+  /** 行内改色提交 */
+  async function commitColor(t: SessionType, color: string) {
+    setPendingColor(null)
+    if (color === t.color) return
+    try {
+      await api.patch(`/session-types/${t.id}`, { color })
+      void reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '修改颜色失败')
+    }
+  }
+
+  async function removeType(t: SessionType) {
+    if (!window.confirm(`确定删除类型「${t.name}」？`)) return
+    setError('')
+    try {
+      await api.delete(`/session-types/${t.id}`)
+      if (expanded === t.key) setExpanded(null)
+      void reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除失败')
+    }
+  }
+
+  if (!meetingId) return <EmptyHint text="请先打开一个会议" />
+  if (loading) return <EmptyHint text="加载中…" />
+
+  const typeList: SessionType[] = types
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-end gap-2 border-b border-gray-100 px-2 py-2">
+        {error && <span className="min-w-0 flex-1 truncate text-xs text-red-600" title={error}>{error}</span>}
+        <Button
+          size="sm"
+          className="h-8 px-2 text-xs"
+          onClick={() => setDialog({ open: true, type: null })}
+        >
+          + 新增类型
+        </Button>
+      </div>
+      <div className="flex-1 overflow-y-auto px-2">
+        {typeList.length === 0 ? (
+          <EmptyHint text="暂无活动类型" />
+        ) : (
+          <div className="space-y-1">
+            {typeList.map((t) => {
+              const items = byType[t.key] ?? []
+              const isOpen = expanded === t.key
+              const color = pendingColor?.key === t.key ? pendingColor.color : t.color
+              return (
+                <div key={t.id} className="rounded-md border border-gray-100">
+                  {/* 类型行：色块（改色）+ 名称 + 场次数 + 操作 */}
+                  <div className="group flex cursor-pointer items-center gap-2 px-2 py-2 hover:bg-gray-50">
+                    <input
+                      type="color"
+                      value={color}
+                      title="点击修改颜色"
+                      className="h-4 w-4 shrink-0 cursor-pointer appearance-none rounded-full border border-gray-200 bg-white p-0"
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setPendingColor({ key: t.key, color: e.target.value })}
+                      onBlur={(e) => void commitColor(t, e.target.value)}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-800" onClick={() => toggleType(t)}>
+                      {t.name}
+                    </span>
+                    <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px]" style={typeTagStyle(color)}>
+                      {items.length} 场
+                    </span>
+                    <div className="flex shrink-0 gap-0.5 opacity-0 group-hover:opacity-100">
+                      <button
+                        className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-700"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setDialog({ open: true, type: t })
+                        }}
+                        title="编辑名称/颜色"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                          <path d="M4 20h4L20 8l-4-4L4 16v4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                      <button
+                        className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void removeType(t)
+                        }}
+                        title="删除类型"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                          <path d="M4 7h16M9 7V5h6v2m-8 0l1 13h8l1-13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  {/* 展开详情：该类型的全部场次 */}
+                  {isOpen && (
+                    <div className="space-y-1 border-t border-gray-100 px-2 py-2">
+                      {items.length === 0 ? (
+                        <div className="px-1 py-1 text-xs text-gray-400">暂无该类型的场次</div>
+                      ) : (
+                        items.map((s) => {
+                          const venue = s.venueId ? venueMap[s.venueId] : null
+                          const speakers = speakersBySession[s.id] ?? []
+                          const d = new Date(s.startTime)
+                          const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+                          return (
+                            <div key={s.id} className="rounded border border-gray-100 px-2 py-1.5 text-xs">
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="truncate font-medium text-gray-800">{s.title}</span>
+                                <span className="shrink-0 text-gray-400">
+                                  {dateStr} {formatTime(s.startTime)}–{formatTime(s.endTime)}
+                                </span>
+                              </div>
+                              <div className="mt-0.5 flex items-center gap-1.5 text-gray-400">
+                                {venue && <span className="truncate">@ {venue.name}</span>}
+                                {speakers.length > 0 && (
+                                  <span className="truncate">
+                                    {speakers.map((sp) => `${sp.participantName}（${SPEAKER_ROLE[sp.role] ?? sp.role}）`).join('、')}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+      <SessionTypeDialog
+        open={dialog.open}
+        sessionType={dialog.type}
+        meetingId={meetingId}
+        onClose={() => setDialog({ open: false, type: null })}
+        onSaved={() => {
+          setDialog({ open: false, type: null })
+          setError('')
+          void reload()
+        }}
+      />
     </div>
   )
 }

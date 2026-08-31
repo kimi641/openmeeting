@@ -7,6 +7,7 @@ import {
   type Meeting,
   type Participant,
   type Session,
+  type SessionType,
   type Speaker,
   type Venue,
 } from '../lib/api'
@@ -16,6 +17,7 @@ import { Dialog, DialogFooter } from '../components/ui/dialog'
 import { MultiSelect } from '../components/ui/MultiSelect'
 import { Field, Input, Select, Textarea } from '../components/ui/form'
 import { ScheduleCalendar } from '../components/ScheduleCalendar'
+import { useSessionTypes } from '../lib/hooks'
 import {
   MEETING_STATUS,
   SESSION_TYPE,
@@ -37,6 +39,7 @@ export function MeetingDetailPage() {
   const [speakersBySession, setSpeakersBySession] = useState<Record<string, Speaker[]>>({})
   const [conflicts, setConflicts] = useState<Conflict[]>([])
   const [participants, setParticipants] = useState<Participant[]>([])
+  const { types: sessionTypes, reload: reloadSessionTypes } = useSessionTypes(id)
   const [loading, setLoading] = useState(true)
   const [notFound_, setNotFound] = useState(false)
 
@@ -266,6 +269,7 @@ export function MeetingDetailPage() {
         venues={venues}
         sessions={sessions}
         speakersBySession={speakersBySession}
+        sessionTypes={sessionTypes}
         conflictSessionIds={conflictSessionIds}
         onAddSession={(venueId, date, minutes) =>
           setSessionDialog({ open: true, venueId, session: null, defaults: { date, startMinutes: minutes } })
@@ -309,6 +313,7 @@ export function MeetingDetailPage() {
         meetingId={meeting.id}
         venues={venues}
         participants={participants}
+        sessionTypes={sessionTypes}
         onParticipantCreated={(p) => setParticipants((prev) => [...prev, p])}
         onRemove={(s) => void removeSession(s)}
         onClose={() => setSessionDialog({ open: false, venueId: null, session: null })}
@@ -500,6 +505,7 @@ function SessionDialog({
   meetingId,
   venues,
   participants,
+  sessionTypes,
   onParticipantCreated,
   onRemove,
   onClose,
@@ -512,13 +518,14 @@ function SessionDialog({
   meetingId: string
   venues: Venue[]
   participants: Participant[]
+  sessionTypes: SessionType[]
   onParticipantCreated: (p: Participant) => void
   onRemove: (session: Session) => void
   onClose: () => void
   onSaved: () => void
 }) {
   const [title, setTitle] = useState('')
-  const [type, setType] = useState<Session['type']>('speech')
+  const [type, setType] = useState<string>('speech')
   const [startTime, setStartTime] = useState('')
   const [endTime, setEndTime] = useState('')
   const [description, setDescription] = useState('')
@@ -716,10 +723,13 @@ function SessionDialog({
             </Field>
           </div>
           <Field label="类型">
-            <Select value={type} onChange={(e) => setType(e.target.value as Session['type'])}>
-              {Object.entries(SESSION_TYPE).map(([v, meta]) => (
-                <option key={v} value={v}>
-                  {meta.label}
+            <Select value={type} onChange={(e) => setType(e.target.value)}>
+              {(sessionTypes.length > 0
+                ? sessionTypes.map((t) => ({ key: t.key, name: t.name, color: t.color }))
+                : Object.entries(SESSION_TYPE).map(([k, v]) => ({ key: k, name: v.label, color: v.color }))
+              ).map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.name}
                 </option>
               ))}
             </Select>

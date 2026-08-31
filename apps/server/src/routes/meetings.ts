@@ -11,7 +11,7 @@ import {
   type ConflictSpeaker,
 } from '@meeting/shared'
 import { db } from '../db'
-import { meetings, participants, sessionSpeakers, sessions, venues } from '../db/schema'
+import { meetings, participants, sessionSpeakers, sessionTypes, sessions, venues } from '../db/schema'
 import { requireAuth, type AppEnv } from '../lib/auth'
 import { notFound } from '../lib/http'
 import { applyTemplate } from '../db/templates'
@@ -241,9 +241,11 @@ meetingsRouter.get('/:id/conflicts', (c) => {
 
 // ---------- 日程表导出（Excel） ----------
 
+/** 内置类型名回退（会议未 seed session_types 时兜底） */
 const TYPE_LABEL: Record<string, string> = {
   speech: '演讲',
   panel: '圆桌',
+  forum: '论坛',
   break: '茶歇',
   checkin: '签到',
   other: '其他',
@@ -300,6 +302,13 @@ meetingsRouter.get('/:id/export/schedule.xlsx', async (c) => {
     .where(eq(sessions.meetingId, meeting.id))
     .orderBy(asc(sessions.startTime))
     .all()
+
+  // 活动类型名称（含用户自定义；未 seed 的内置 key 回退静态映射）
+  const typeNameMap = new Map<string, string>()
+  for (const t of db.select().from(sessionTypes).where(eq(sessionTypes.meetingId, meeting.id)).all()) {
+    typeNameMap.set(t.key, t.name)
+  }
+  const typeNameOf = (key: string): string => typeNameMap.get(key) ?? TYPE_LABEL[key] ?? key
 
   const speakerRows = db
     .select({
@@ -433,7 +442,7 @@ meetingsRouter.get('/:id/export/schedule.xlsx', async (c) => {
           // 全体环节：首列写内容（标题+副标题），整行合并
           if (col === 2) {
             const speakers = (speakersBySession.get(cross.id) ?? []).join('、')
-            const subtitle = [TYPE_LABEL[cross.type] ?? cross.type, speakers].filter(Boolean).join(' · ')
+            const subtitle = [typeNameOf(cross.type), speakers].filter(Boolean).join(' · ')
             cell.value = subtitle ? `${cross.title}\n${subtitle}` : cross.title
             cell.font = { bold: true }
           }
@@ -442,7 +451,7 @@ meetingsRouter.get('/:id/export/schedule.xlsx', async (c) => {
           const s = venue ? slotSessions.find((x) => x.venueId === venue.id) : undefined
           if (s) {
             const speakers = (speakersBySession.get(s.id) ?? []).join('、')
-            const subtitle = [TYPE_LABEL[s.type] ?? s.type, speakers].filter(Boolean).join(' · ')
+            const subtitle = [typeNameOf(s.type), speakers].filter(Boolean).join(' · ')
             cell.value = subtitle ? `${s.title}\n${subtitle}` : s.title
             cell.font = { bold: true }
           }

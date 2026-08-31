@@ -5,8 +5,26 @@ import { z } from 'zod'
 export const MeetingStatusEnum = z.enum(['draft', 'published', 'ongoing', 'finished'])
 export type MeetingStatus = z.infer<typeof MeetingStatusEnum>
 
-export const SessionTypeEnum = z.enum(['speech', 'panel', 'break', 'checkin', 'other'])
+/** 活动类型 key：内置（speech/panel/...）或自定义类型 key（session_types.key） */
+export const SessionTypeEnum = z.string().min(1).max(64)
 export type SessionType = z.infer<typeof SessionTypeEnum>
+
+const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, '颜色应为 #RRGGBB')
+
+// ---------- 活动类型 ----------
+
+export const createSessionTypeSchema = z.object({
+  name: z.string().min(1, '名称不能为空').max(50),
+  color: hexColor,
+})
+export type CreateSessionTypeInput = z.infer<typeof createSessionTypeSchema>
+
+export const updateSessionTypeSchema = z.object({
+  name: z.string().min(1).max(50).optional(),
+  color: hexColor.optional(),
+  sortOrder: z.number().int().optional(),
+})
+export type UpdateSessionTypeInput = z.infer<typeof updateSessionTypeSchema>
 
 export const SpeakerRoleEnum = z.enum(['host', 'speaker', 'panelist'])
 export type SpeakerRole = z.infer<typeof SpeakerRoleEnum>
