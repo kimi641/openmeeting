@@ -73,3 +73,17 @@ export const CONFIRM_STATUS: Record<string, string> = {
   confirmed: '已确认',
   declined: '已拒绝',
 }
+
+/**
+ * 读取日历中隐藏场地的完整映射（localStorage 按天存储：Record<日期, 场地ID[]>）。
+ * 导出（Excel/PDF）按天应用对应的隐藏列表，保证其他日期的日程不受影响。
+ */
+export function getHiddenVenueMap(meetingId: string): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(`cal:hidden-venues:${meetingId}`)
+    if (!raw) return {}
+    return JSON.parse(raw) as Record<string, string[]>
+  } catch {
+    return {}
+  }
+}

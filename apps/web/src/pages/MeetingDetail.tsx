@@ -13,6 +13,7 @@ import {
 import { Button } from '../components/ui/button'
 import { Badge, Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Dialog, DialogFooter } from '../components/ui/dialog'
+import { MultiSelect } from '../components/ui/MultiSelect'
 import { Field, Input, Select, Textarea } from '../components/ui/form'
 import { ScheduleCalendar } from '../components/ScheduleCalendar'
 import {
@@ -20,6 +21,7 @@ import {
   SESSION_TYPE,
   SPEAKER_ROLE,
   fromLocalInputValue,
+  getHiddenVenueMap,
   toLocalInputValue,
 } from '../lib/utils'
 
@@ -188,6 +190,27 @@ export function MeetingDetailPage() {
                 </option>
               ))}
             </Select>
+            <Button
+              variant="outline"
+              onClick={() => {
+                const hiddenMap = getHiddenVenueMap(meeting.id)
+                const qs =
+                  Object.keys(hiddenMap).length > 0
+                    ? `?hiddenVenues=${encodeURIComponent(JSON.stringify(hiddenMap))}`
+                    : ''
+                window.location.href = `/api/meetings/${meeting.id}/export/schedule.xlsx${qs}`
+              }}
+              title="导出日程表 Excel 文件（仅按天应用日历中的场地隐藏，其余日程保持完整）"
+            >
+              导出 Excel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => window.open(`/print/schedule/${meeting.id}?auto=1`, '_blank')}
+              title="打开打印页，可另存为 PDF"
+            >
+              导出 PDF
+            </Button>
             <Button variant="outline" onClick={() => void duplicate()}>
               复制
             </Button>
@@ -286,6 +309,7 @@ export function MeetingDetailPage() {
         meetingId={meeting.id}
         venues={venues}
         participants={participants}
+        onParticipantCreated={(p) => setParticipants((prev) => [...prev, p])}
         onRemove={(s) => void removeSession(s)}
         onClose={() => setSessionDialog({ open: false, venueId: null, session: null })}
         onSaved={() => {
@@ -476,6 +500,7 @@ function SessionDialog({
   meetingId,
   venues,
   participants,
+  onParticipantCreated,
   onRemove,
   onClose,
   onSaved,
@@ -487,6 +512,7 @@ function SessionDialog({
   meetingId: string
   venues: Venue[]
   participants: Participant[]
+  onParticipantCreated: (p: Participant) => void
   onRemove: (session: Session) => void
   onClose: () => void
   onSaved: () => void
@@ -498,10 +524,22 @@ function SessionDialog({
   const [description, setDescription] = useState('')
   const [crossTracks, setCrossTracks] = useState(false)
   const [curVenueId, setCurVenueId] = useState<string | null>(venueId)
-  // 新建时本地暂存的嘉宾；编辑时直接调接口
+  // 新建时本地暂存的嘉宾；编辑时 = 已有嘉宾 + 新增（保存时 diff 同步）
   const [newSpeakers, setNewSpeakers] = useState<{ participantId: string; role: Speaker['role'] }[]>([])
-  const [addPid, setAddPid] = useState('')
+  // 编辑态：打开弹窗时场次的已有嘉宾（含 speaker 记录 ID，用于移除时调删除接口）
+  const [initialSpeakers, setInitialSpeakers] = useState<
+    { id: string; participantId: string; role: Speaker['role'] }[]
+  >([])
+  const [removedSpeakerIds, setRemovedSpeakerIds] = useState<string[]>([])
+  const [addPids, setAddPids] = useState<string[]>([])
   const [addRole, setAddRole] = useState<Speaker['role']>('speaker')
+  // 内联新增人员
+  const [creating, setCreating] = useState(false)
+  const [npName, setNpName] = useState('')
+  const [npOrg, setNpOrg] = useState('')
+  const [npTitle, setNpTitle] = useState('')
+  const [npError, setNpError] = useState('')
+  const [npLoading, setNpLoading] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -513,8 +551,25 @@ function SessionDialog({
       setDescription(session?.description ?? '')
       setCrossTracks(session?.crossTracks ?? false)
       setNewSpeakers([])
-      setAddPid('')
+      setInitialSpeakers([])
+      setRemovedSpeakerIds([])
+      setAddPids([])
       setAddRole('speaker')
+      // 编辑态：加载场次的已有嘉宾，回显到嘉宾列表（与日历显示同步）
+      if (session) {
+        api
+          .get<ListResult<Speaker>>(`/sessions/${session.id}/speakers`)
+          .then((r) => {
+            setNewSpeakers(r.data.map((sp) => ({ participantId: sp.participantId, role: sp.role })))
+            setInitialSpeakers(r.data.map((sp) => ({ id: sp.id, participantId: sp.participantId, role: sp.role })))
+          })
+          .catch(() => {})
+      }
+      setCreating(false)
+      setNpName('')
+      setNpOrg('')
+      setNpTitle('')
+      setNpError('')
       setError('')
       if (session) {
         setStartTime(toLocalInputValue(session.startTime))
@@ -533,11 +588,42 @@ function SessionDialog({
     }
   }, [open, session, venueId, defaults])
 
-  function addLocalSpeaker() {
-    if (!addPid) return
-    if (newSpeakers.some((s) => s.participantId === addPid)) return
-    setNewSpeakers([...newSpeakers, { participantId: addPid, role: addRole }])
-    setAddPid('')
+  function addLocalSpeakers() {
+    const adds = addPids.filter((pid) => !newSpeakers.some((s) => s.participantId === pid))
+    if (adds.length > 0) {
+      setNewSpeakers([...newSpeakers, ...adds.map((participantId) => ({ participantId, role: addRole }))])
+    }
+    setAddPids([])
+  }
+
+  /** 内联创建人员并直接加入嘉宾暂存列表 */
+  async function createParticipantAndAdd() {
+    if (!npName.trim()) {
+      setNpError('请填写姓名')
+      return
+    }
+    setNpLoading(true)
+    setNpError('')
+    try {
+      const p = await api.post<Participant>('/participants', {
+        meetingId,
+        name: npName.trim(),
+        orgName: npOrg.trim() || null,
+        title: npTitle.trim() || null,
+      })
+      onParticipantCreated(p)
+      if (!newSpeakers.some((s) => s.participantId === p.id)) {
+        setNewSpeakers([...newSpeakers, { participantId: p.id, role: addRole }])
+      }
+      setCreating(false)
+      setNpName('')
+      setNpOrg('')
+      setNpTitle('')
+    } catch (err) {
+      setNpError(err instanceof Error ? err.message : '创建失败')
+    } finally {
+      setNpLoading(false)
+    }
   }
 
   async function submit() {
@@ -564,9 +650,14 @@ function SessionDialog({
           description: description || null,
           crossTracks,
         })
-        // 编辑态：暂存嘉宾逐个挂到已有场次
+        // 编辑态：diff 同步嘉宾 —— 新增的挂接，移除的解绑
         for (const sp of newSpeakers) {
-          await api.post(`/sessions/${session.id}/speakers`, sp).catch(() => {})
+          if (!initialSpeakers.some((x) => x.participantId === sp.participantId)) {
+            await api.post(`/sessions/${session.id}/speakers`, sp).catch(() => {})
+          }
+        }
+        for (const speakerId of removedSpeakerIds) {
+          await api.delete(`/session-speakers/${speakerId}`).catch(() => {})
         }
       } else {
         await api.post('/sessions', {
@@ -667,28 +758,75 @@ function SessionDialog({
           全场环节（横跨所有场地，如签到/茶歇）
         </label>
 
-        <Field label="嘉宾" hint="从通讯录选择，可多人；保存后生效">
+        <Field label="嘉宾" hint="下拉可搜索、多重勾选人员，可新增；保存后生效">
           <div className="flex gap-2">
-            <Select value={addPid} onChange={(e) => setAddPid(e.target.value)} className="flex-1">
-              <option value="">选择人员…</option>
-              {participants.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                  {p.orgName ? `（${p.orgName}）` : ''}
-                </option>
-              ))}
-            </Select>
-            <Select value={addRole} onChange={(e) => setAddRole(e.target.value as Speaker['role'])} className="w-28">
+            <div className="flex-1">
+              <MultiSelect
+                value={addPids}
+                onChange={setAddPids}
+                options={participants.map((p) => ({
+                  value: p.id,
+                  label: p.orgName ? `${p.name}（${p.orgName}）` : p.name,
+                }))}
+                placeholder="选择人员…"
+                searchPlaceholder="搜索姓名 / 单位…"
+                footer="＋ 新增人员…"
+                onFooterClick={() => setCreating(true)}
+              />
+            </div>
+            <Select value={addRole} onChange={(e) => setAddRole(e.target.value as Speaker['role'])} className="w-28 shrink-0">
               {Object.entries(SPEAKER_ROLE).map(([v, label]) => (
                 <option key={v} value={v}>
                   {label}
                 </option>
               ))}
             </Select>
-            <Button variant="outline" onClick={addLocalSpeaker} disabled={!addPid}>
+            <Button variant="outline" onClick={addLocalSpeakers} disabled={addPids.length === 0} className="shrink-0">
               添加
             </Button>
           </div>
+          {creating && (
+            <div className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-3">
+              <div className="mb-2 text-xs font-medium text-gray-600">新增人员（将同时加入通讯录）</div>
+              <div className="grid grid-cols-3 gap-2">
+                <Input
+                  placeholder="姓名 *"
+                  value={npName}
+                  onChange={(e) => setNpName(e.target.value)}
+                  className="h-8 text-sm"
+                  autoFocus
+                />
+                <Input
+                  placeholder="单位（选填）"
+                  value={npOrg}
+                  onChange={(e) => setNpOrg(e.target.value)}
+                  className="h-8 text-sm"
+                />
+                <Input
+                  placeholder="职务（选填）"
+                  value={npTitle}
+                  onChange={(e) => setNpTitle(e.target.value)}
+                  className="h-8 text-sm"
+                />
+              </div>
+              {npError && <div className="mt-1.5 text-xs text-red-600">{npError}</div>}
+              <div className="mt-2 flex justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setCreating(false)
+                    setNpError('')
+                  }}
+                >
+                  取消
+                </Button>
+                <Button size="sm" onClick={() => void createParticipantAndAdd()} disabled={npLoading}>
+                  {npLoading ? '创建中…' : '创建并添加'}
+                </Button>
+              </div>
+            </div>
+          )}
           {newSpeakers.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
               {newSpeakers.map((sp, i) => (
@@ -700,7 +838,13 @@ function SessionDialog({
                   <span className="text-gray-400">{SPEAKER_ROLE[sp.role] ?? sp.role}</span>
                   <button
                     className="text-gray-400 hover:text-red-600 cursor-pointer"
-                    onClick={() => setNewSpeakers(newSpeakers.filter((_, j) => j !== i))}
+                    onClick={() => {
+                      const removed = newSpeakers[i]
+                      if (!removed) return
+                      const rec = initialSpeakers.find((x) => x.participantId === removed.participantId)
+                      if (rec) setRemovedSpeakerIds((prev) => [...prev, rec.id])
+                      setNewSpeakers(newSpeakers.filter((_, j) => j !== i))
+                    }}
                   >
                     ×
                   </button>

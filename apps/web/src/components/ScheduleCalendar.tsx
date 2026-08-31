@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Session, Speaker, Venue } from '../lib/api'
+import type { Meeting, Session, Speaker, Venue } from '../lib/api'
 import { Button } from './ui/button'
 import { SESSION_TYPE, formatTime } from '../lib/utils'
 
@@ -52,6 +52,27 @@ function eachDate(start: string, end: string): string[] {
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 
+/** 隐藏场地列持久化（localStorage，按会议 ID 隔离，按天分开存储） */
+const HIDDEN_KEY = (meetingId: string) => `cal:hidden-venues:${meetingId}`
+
+/** 读取全部 { 日期: 场地ID列表 } */
+function loadHiddenMap(meetingId: string): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(HIDDEN_KEY(meetingId))
+    return raw ? (JSON.parse(raw) as Record<string, string[]>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveHiddenMap(meetingId: string, map: Record<string, string[]>) {
+  try {
+    localStorage.setItem(HIDDEN_KEY(meetingId), JSON.stringify(map))
+  } catch {
+    /* ignore */
+  }
+}
+
 /** 日历列：场地（nullVenue 表示"未指定场地"的收纳列） */
 interface Column {
   key: string
@@ -74,7 +95,7 @@ interface DragInfo {
 }
 
 interface ScheduleCalendarProps {
-  meeting: { startDate: string; endDate: string }
+  meeting: Meeting
   venues: Venue[]
   sessions: Session[]
   speakersBySession: Record<string, Speaker[]>
@@ -108,6 +129,29 @@ export function ScheduleCalendar({
   const [dayIdx, setDayIdx] = useState(0)
   const day = days[dayIdx] ?? days[0] ?? ''
 
+  // 隐藏的场地列（按天分开，持久化到 localStorage）
+  const [hiddenVenueIds, setHiddenVenueIds] = useState<string[]>(() =>
+    loadHiddenMap(meeting.id)[day] ?? [],
+  )
+  useEffect(() => {
+    // 切换会议或日期时加载当天的隐藏列表
+    setHiddenVenueIds(loadHiddenMap(meeting.id)[day] ?? [])
+  }, [meeting.id, day])
+
+  function toggleVenueHidden(id: string) {
+    setHiddenVenueIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]
+      const map = loadHiddenMap(meeting.id)
+      if (next.length > 0) {
+        map[day] = next
+      } else {
+        delete map[day]
+      }
+      saveHiddenMap(meeting.id, map)
+      return next
+    })
+  }
+
   const [drag, setDrag] = useState<DragInfo | null>(null)
   const dragRef = useRef<DragInfo | null>(null)
   const gridRef = useRef<HTMLDivElement>(null)
@@ -116,14 +160,49 @@ export function ScheduleCalendar({
   const [dragColKey, setDragColKey] = useState<string | null>(null)
   const [overColKey, setOverColKey] = useState<string | null>(null)
 
-  // 列 = 场地（按 sortOrder）；存在未指定场地的场次时附加"未指定"收纳列
+  // 当天的场次
+  const daySessions = useMemo(
+    () => sessions.filter((s) => dateKeyOf(s.startTime) === day),
+    [sessions, day],
+  )
+
+  // 当天有场次的场地 ID（空白场地列默认隐藏，避免多日多场地编排混乱）
+  const dayVenueIds = useMemo(
+    () =>
+      new Set(
+        daySessions
+          .map((s) => s.venueId)
+          .filter((v): v is string => !!v),
+      ),
+    [daySessions],
+  )
+  const [showEmptyVenues, setShowEmptyVenues] = useState(false)
+
+  // 列 = 场地（按 sortOrder，过滤隐藏列与空白列）；存在未指定场地的场次时附加"未指定"收纳列
   const columns = useMemo<Column[]>(() => {
-    const cols: Column[] = venues.map((v) => ({ key: v.id, name: v.name, venue: v }))
+    const cols: Column[] = venues
+      .filter(
+        (v) =>
+          !hiddenVenueIds.includes(v.id) && (showEmptyVenues || dayVenueIds.has(v.id)),
+      )
+      .map((v) => ({ key: v.id, name: v.name, venue: v }))
     if (sessions.some((s) => !s.venueId)) {
       cols.push({ key: '__none__', name: '未指定场地', venue: null })
     }
     return cols
-  }, [venues, sessions])
+  }, [venues, sessions, hiddenVenueIds, dayVenueIds, showEmptyVenues])
+
+  // 当天被自动隐藏的空白场地数量（供切换按钮提示）
+  const emptyVenueCount = useMemo(
+    () => venues.filter((v) => !dayVenueIds.has(v.id) && !hiddenVenueIds.includes(v.id)).length,
+    [venues, dayVenueIds, hiddenVenueIds],
+  )
+
+  // 被隐藏的场地（供工具栏展示恢复入口）
+  const hiddenVenues = useMemo(
+    () => venues.filter((v) => hiddenVenueIds.includes(v.id)),
+    [venues, hiddenVenueIds],
+  )
 
   // 按场地分组
   const sessionsByVenue = useMemo(() => {
@@ -135,11 +214,6 @@ export function ScheduleCalendar({
     return map
   }, [sessions])
 
-  // 当天的场次
-  const daySessions = useMemo(
-    () => sessions.filter((s) => dateKeyOf(s.startTime) === day),
-    [sessions, day],
-  )
   const crossSessions = daySessions.filter((s) => s.crossTracks)
 
   // 时间轴范围：默认 8:00–22:00，有场次时向外扩展到整点
@@ -317,15 +391,48 @@ export function ScheduleCalendar({
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-400">点击空白新增 · 点击场次编辑 · 拖动场次调时间/场地 · 拖动列头排序</span>
+          {emptyVenueCount > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowEmptyVenues((v) => !v)}
+              title="切换显示当天没有场次的空白场地列"
+            >
+              {showEmptyVenues ? '隐藏空白场地' : `显示空白场地（${emptyVenueCount}）`}
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={onAddVenue}>
             新增场地
           </Button>
         </div>
       </div>
 
+      {/* 已隐藏的场地（仅当天）：点击恢复显示 */}
+      {hiddenVenues.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-gray-400">今日已隐藏：</span>
+          {hiddenVenues.map((v) => (
+            <button
+              key={v.id}
+              onClick={() => toggleVenueHidden(v.id)}
+              className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-200 hover:text-gray-700 cursor-pointer"
+              title="点击恢复显示"
+            >
+              {v.name}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" stroke="currentColor" strokeWidth="2" />
+                <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" />
+              </svg>
+            </button>
+          ))}
+        </div>
+      )}
+
       {columns.length === 0 ? (
         <div className="rounded-lg border border-dashed border-gray-300 py-16 text-center text-sm text-gray-400">
-          暂无场地，点击「新增场地」创建日历第一列
+          {venues.length > 0
+            ? '当天所有场地列均已隐藏（无场次或手动隐藏），可点击上方按钮恢复显示'
+            : '暂无场地，点击「新增场地」创建日历第一列'}
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
@@ -392,6 +499,15 @@ export function ScheduleCalendar({
                       >
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
                           <path d="M4 20h4L20 8l-4-4L4 16v4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                      <button
+                        className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 cursor-pointer"
+                        title="隐藏此场地列（不删除，可随时恢复）"
+                        onClick={() => toggleVenueHidden(col.venue!.id)}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                          <path d="M3 3l18 18M10.5 5.2A9.8 9.8 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3 3.9M6.6 6.7A17 17 0 0 0 2 12s3.5 7 10 7c1.6 0 3-.4 4.3-1M9.9 9.9a3 3 0 0 0 4.2 4.2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                       </button>
                       <button

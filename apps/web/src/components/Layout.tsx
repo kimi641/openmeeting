@@ -2,19 +2,19 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Navigate, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { api, type User } from '../lib/api'
 import { cn } from '../lib/utils'
-import { Button } from './ui/button'
+import { RightPanel } from './RightPanel'
 
+// n8n 风格：左侧窄图标栏，仅保留仪表盘 / 会议 / 设置
 const NAV = [
   { to: '/', label: '仪表盘', icon: 'M3 10.5 10 4l7 6.5V20h-4v-5h-6v5H3z' },
   { to: '/meetings', label: '会议', icon: 'M4 5h16v13H4zM8 3v4M16 3v4M4 9h16' },
-  { to: '/contacts', label: '通讯录', icon: 'M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 20c0-3 2.7-5 6-5s6 2 6 5M16 4a3 3 0 0 1 0 6M17 15c2.5.4 4 2.2 4 5' },
-  { to: '/venues', label: '场地', icon: 'M3 20V9l5-4 5 4v11M13 20V11l4-3 4 3v9M6 20v-3h2v3M16 20v-3h2v3' },
-  { to: '/settings', label: '系统设置', icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM4 12l-1.5-2 1-2.5L6 7l2-2 .5-3L11 3l2.5-1L16 4l3 .5.5 3 2 2-1 2.5 1 2.5-2 2-.5 3-3 .5-2 2-2.5-1-2.5 1-2-2-3-.5-1-2.5z' },
+  { to: '/settings', label: '设置', icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM4 12l-1.5-2 1-2.5L6 7l2-2 .5-3L11 3l2.5-1L16 4l3 .5.5 3 2 2-1 2.5 1 2.5-2 2-.5 3-3 .5-2 2-2.5-1-2.5 1-2-2-3-.5-1-2.5z' },
 ]
 
 export function Layout() {
   const [user, setUser] = useState<User | null>(null)
   const [checked, setChecked] = useState(false)
+  const [panelCollapsed, setPanelCollapsed] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -37,50 +37,57 @@ export function Layout() {
 
   return (
     <div className="flex h-full">
-      <aside className="flex w-52 shrink-0 flex-col border-r border-gray-200 bg-white">
-        <div className="flex h-14 items-center gap-2 border-b border-gray-100 px-5">
-          <div className="flex h-7 w-7 items-center justify-center rounded bg-blue-700 text-xs font-bold text-white">
+      {/* 左侧窄图标栏（n8n 风格） */}
+      <aside className="flex w-14 shrink-0 flex-col items-center border-r border-gray-200 bg-gray-900">
+        <div className="flex h-14 items-center justify-center">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-700 text-sm font-bold text-white">
             会
           </div>
-          <span className="font-semibold">会议排程系统</span>
         </div>
-        <nav className="flex-1 space-y-0.5 p-2">
+        <nav className="flex-1 space-y-1 py-2">
           {NAV.map((n) => (
             <NavLink
               key={n.to}
               to={n.to}
               end={n.to === '/'}
+              title={n.label}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 hover:text-gray-900',
-                  isActive && 'bg-blue-50 font-medium text-blue-700',
+                  'flex h-10 w-10 items-center justify-center rounded-lg transition-colors',
+                  isActive
+                    ? 'bg-blue-600/20 text-blue-400'
+                    : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200',
                 )
               }
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="shrink-0">
                 <path d={n.icon} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              {n.label}
             </NavLink>
           ))}
         </nav>
-        <div className="border-t border-gray-100 p-3">
-          <div className="mb-2 px-1 text-xs text-gray-500">
-            {user.username}
-            <span className="ml-1.5 rounded bg-gray-100 px-1.5 py-0.5">
-              {user.role === 'admin' ? '管理员' : '成员'}
-            </span>
-          </div>
-          <Button variant="outline" size="sm" className="w-full" onClick={logout}>
-            退出登录
-          </Button>
+        <div className="py-3">
+          <button
+            onClick={logout}
+            title="退出登录"
+            className="flex h-10 w-10 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-red-400"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
         </div>
       </aside>
+
+      {/* 中间主内容区 */}
       <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-6xl px-6 py-6">
+        <div className="mx-auto max-w-5xl px-6 py-6">
           <Outlet context={{ user }} />
         </div>
       </main>
+
+      {/* 右侧面板：日历 / 人员 / 场地 */}
+      <RightPanel collapsed={panelCollapsed} onToggle={() => setPanelCollapsed((v) => !v)} />
     </div>
   )
 }

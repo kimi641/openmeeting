@@ -128,8 +128,8 @@ export type ReorderVenuesInput = z.infer<typeof reorderVenuesSchema>
 export const createParticipantSchema = z.object({
   meetingId: z.string().min(1, '缺少会议 ID'),
   name: z.string().min(1, '姓名不能为空').max(100),
-  orgName: z.string().max(200).optional(),
-  title: z.string().max(200).optional(),
+  orgName: z.string().max(200).nullish(),
+  title: z.string().max(200).nullish(),
   phone: z.string().max(50).optional(),
   email: z.union([z.email('邮箱格式不正确'), z.literal('')]).optional(),
   note: z.string().max(1000).optional(),
