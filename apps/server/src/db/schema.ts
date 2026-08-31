@@ -146,6 +146,38 @@ export const meetingParticipants = sqliteTable('meeting_participants', {
   meetingRole: text('meeting_role'),
 })
 
+// ---------- 组织与主办方 ----------
+
+export const organizations = sqliteTable(
+  'organizations',
+  {
+    id: text('id').primaryKey(),
+    /** 组织是会议级资源 */
+    meetingId: text('meeting_id')
+      .notNull()
+      .references(() => meetings.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    contact: text('contact'),
+    phone: text('phone'),
+    note: text('note'),
+  },
+  (t) => [index('idx_organizations_meeting').on(t.meetingId)],
+)
+
+export const sessionOrganizers = sqliteTable(
+  'session_organizers',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+  },
+  (t) => [index('idx_organizers_organization').on(t.organizationId)],
+)
+
 // ---------- 材料 ----------
 
 export const materials = sqliteTable('materials', {

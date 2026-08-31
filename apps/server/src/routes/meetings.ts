@@ -11,7 +11,7 @@ import {
   type ConflictSpeaker,
 } from '@meeting/shared'
 import { db } from '../db'
-import { meetings, participants, sessionSpeakers, sessionTypes, sessions, venues } from '../db/schema'
+import { meetings, organizations, participants, sessionOrganizers, sessionSpeakers, sessionTypes, sessions, venues } from '../db/schema'
 import { requireAuth, type AppEnv } from '../lib/auth'
 import { notFound } from '../lib/http'
 import { applyTemplate } from '../db/templates'
@@ -328,6 +328,27 @@ meetingsRouter.get('/:id/export/schedule.xlsx', async (c) => {
     speakersBySession.set(sp.sessionId, list)
   }
 
+  // 各场次的主办方（单元格副标题展示，与日历块一致带"主办："前缀）
+  const organizerRows = db
+    .select({
+      sessionId: sessionOrganizers.sessionId,
+      organizationName: organizations.name,
+    })
+    .from(sessionOrganizers)
+    .innerJoin(sessions, eq(sessionOrganizers.sessionId, sessions.id))
+    .innerJoin(organizations, eq(sessionOrganizers.organizationId, organizations.id))
+    .where(eq(sessions.meetingId, meeting.id))
+    .all()
+  const organizersBySession = new Map<string, string>()
+  for (const org of organizerRows) {
+    const list = organizersBySession.get(org.sessionId) ?? ''
+    organizersBySession.set(org.sessionId, list ? `${list}、${org.organizationName}` : org.organizationName)
+  }
+  const organizerTextOf = (sessionId: string): string => {
+    const names = organizersBySession.get(sessionId)
+    return names ? `主办：${names}` : ''
+  }
+
   // 按日期分组，组内收集去重的时间段（纵轴行）；仅会议日期范围内的场次（与前端日历一致）
   const dayMap = new Map<string, typeof sessionRows>()
   for (const s of sessionRows) {
@@ -442,7 +463,7 @@ meetingsRouter.get('/:id/export/schedule.xlsx', async (c) => {
           // 全体环节：首列写内容（标题+副标题），整行合并
           if (col === 2) {
             const speakers = (speakersBySession.get(cross.id) ?? []).join('、')
-            const subtitle = [typeNameOf(cross.type), speakers].filter(Boolean).join(' · ')
+            const subtitle = [typeNameOf(cross.type), organizerTextOf(cross.id), speakers].filter(Boolean).join(' · ')
             cell.value = subtitle ? `${cross.title}\n${subtitle}` : cross.title
             cell.font = { bold: true }
           }
@@ -451,7 +472,7 @@ meetingsRouter.get('/:id/export/schedule.xlsx', async (c) => {
           const s = venue ? slotSessions.find((x) => x.venueId === venue.id) : undefined
           if (s) {
             const speakers = (speakersBySession.get(s.id) ?? []).join('、')
-            const subtitle = [typeNameOf(s.type), speakers].filter(Boolean).join(' · ')
+            const subtitle = [typeNameOf(s.type), organizerTextOf(s.id), speakers].filter(Boolean).join(' · ')
             cell.value = subtitle ? `${s.title}\n${subtitle}` : s.title
             cell.font = { bold: true }
           }

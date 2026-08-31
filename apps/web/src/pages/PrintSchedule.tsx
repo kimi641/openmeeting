@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, type ListResult, type Meeting, type Session, type SessionType, type Speaker, type Venue } from '../lib/api'
+import { api, type ListResult, type Meeting, type Session, type SessionOrganizer, type SessionType, type Speaker, type Venue } from '../lib/api'
 import { DEFAULT_SESSION_TYPE, SESSION_TYPE, getHiddenVenueMap } from '../lib/utils'
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
@@ -25,25 +25,28 @@ const ROLE_LABEL: Record<string, string> = {
   panelist: '圆桌嘉宾',
 }
 
-/** 单元格内容：标题 + 第二行副标题（类型 · 嘉宾） */
+/** 单元格内容：标题 + 第二行副标题（类型 · 主办方 · 嘉宾） */
 function CellContent({
   title,
   type,
   typeMap,
+  organizers,
   speakers,
   cross,
 }: {
   title: string
   type: string
   typeMap: Record<string, { label: string; color: string }>
+  organizers: SessionOrganizer[]
   speakers: Speaker[]
   cross?: boolean
 }) {
-  const typeInfo = typeMap[type] ?? DEFAULT_SESSION_TYPE
+  const typeInfo = typeMap[type] ?? SESSION_TYPE.other ?? DEFAULT_SESSION_TYPE
+  const organizerText = organizers.length > 0 ? `主办：${organizers.map((o) => o.organizationName).join('、')}` : ''
   const speakerText = speakers
     .map((sp) => `${sp.participantName}（${ROLE_LABEL[sp.role] ?? sp.role}）`)
     .join('、')
-  const subtitle = [typeInfo.label, speakerText].filter(Boolean).join(' · ')
+  const subtitle = [typeInfo.label, organizerText, speakerText].filter(Boolean).join(' · ')
   return (
     <>
       <div className="font-semibold text-gray-900">
@@ -62,6 +65,7 @@ export function PrintSchedulePage() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [venues, setVenues] = useState<Venue[]>([])
   const [speakersBySession, setSpeakersBySession] = useState<Record<string, Speaker[]>>({})
+  const [organizersBySession, setOrganizersBySession] = useState<Record<string, SessionOrganizer[]>>({})
   const [sessionTypes, setSessionTypes] = useState<SessionType[]>([])
   const [notFound, setNotFound] = useState(false)
   const [ready, setReady] = useState(false)
@@ -94,6 +98,21 @@ export function PrintSchedulePage() {
           bySession[s.id] = speakerLists[i]?.data ?? []
         })
         setSpeakersBySession(bySession)
+
+        // 各场次的主办方（打印页副标题展示）
+        const organizerLists = await Promise.all(
+          sessionRes.data.map((s) =>
+            api
+              .get<ListResult<SessionOrganizer>>(`/sessions/${s.id}/organizers`)
+              .catch(() => ({ data: [] as SessionOrganizer[] })),
+          ),
+        )
+        if (cancelled) return
+        const organizersBySession: Record<string, SessionOrganizer[]> = {}
+        sessionRes.data.forEach((s, i) => {
+          organizersBySession[s.id] = organizerLists[i]?.data ?? []
+        })
+        setOrganizersBySession(organizersBySession)
         setReady(true)
       } catch {
         if (!cancelled) setNotFound(true)
@@ -270,6 +289,7 @@ export function PrintSchedulePage() {
                                 title={cross.title}
                                 type={cross.type}
                                 typeMap={typeMap}
+                                organizers={organizersBySession[cross.id] ?? []}
                                 speakers={speakersBySession[cross.id] ?? []}
                                 cross
                               />
@@ -287,6 +307,7 @@ export function PrintSchedulePage() {
                                       title={s.title}
                                       type={s.type}
                                       typeMap={typeMap}
+                                      organizers={organizersBySession[s.id] ?? []}
                                       speakers={speakersBySession[s.id] ?? []}
                                     />
                                   ) : null}

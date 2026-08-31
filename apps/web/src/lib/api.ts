@@ -105,6 +105,23 @@ export interface Participant {
   note: string | null
 }
 
+/** 会议主办方组织（会议级资源，可在场次弹窗中挂接到场次） */
+export interface Organization {
+  id: string
+  meetingId: string
+  name: string
+  contact: string | null
+  phone: string | null
+  note: string | null
+}
+
+export interface SessionOrganizer {
+  id: string
+  sessionId: string
+  organizationId: string
+  organizationName: string
+}
+
 export interface Venue {
   id: string
   meetingId: string

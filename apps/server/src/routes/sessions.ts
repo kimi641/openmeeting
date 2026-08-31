@@ -3,12 +3,21 @@ import { Hono } from 'hono'
 import { nanoid } from 'nanoid'
 import {
   addSpeakerSchema,
+  createSessionOrganizerSchema,
   createSessionSchema,
   moveSessionSchema,
   updateSessionSchema,
 } from '@meeting/shared'
 import { db } from '../db'
-import { meetings, participants, sessionSpeakers, sessions, venues } from '../db/schema'
+import {
+  meetings,
+  organizations,
+  participants,
+  sessionOrganizers,
+  sessionSpeakers,
+  sessions,
+  venues,
+} from '../db/schema'
 import { requireAuth, type AppEnv } from '../lib/auth'
 import { badRequest, notFound } from '../lib/http'
 
@@ -59,6 +68,14 @@ sessionsRouter.post('/', async (c) => {
     }
   }
 
+  if (input.organizers) {
+    for (const org of input.organizers) {
+      const o = db.select().from(organizations).where(eq(organizations.id, org.organizationId)).get()
+      if (!o) throw notFound('组织')
+      if (o.meetingId !== meeting.id) throw badRequest('组织不属于该会议')
+    }
+  }
+
   const currentMax = db
     .select({ m: max(sessions.sortOrder) })
     .from(sessions)
@@ -93,6 +110,16 @@ sessionsRouter.post('/', async (c) => {
         })
         .run()
     }
+
+    for (const org of input.organizers ?? []) {
+      tx.insert(sessionOrganizers)
+        .values({
+          id: nanoid(12),
+          sessionId: id,
+          organizationId: org.organizationId,
+        })
+        .run()
+    }
   })
 
   return c.json(db.select().from(sessions).where(eq(sessions.id, id)).get(), 201)
@@ -103,6 +130,14 @@ sessionsRouter.patch('/:id', async (c) => {
   const session = getSessionOr404(c.req.param('id'))
   const input = updateSessionSchema.parse(await c.req.json())
   if (input.venueId) getVenueOfMeetingOr404(input.venueId, session.meetingId)
+
+  if (input.organizers) {
+    for (const org of input.organizers) {
+      const o = db.select().from(organizations).where(eq(organizations.id, org.organizationId)).get()
+      if (!o) throw notFound('组织')
+      if (o.meetingId !== session.meetingId) throw badRequest('组织不属于该会议')
+    }
+  }
 
   db.update(sessions)
     .set({
@@ -117,6 +152,16 @@ sessionsRouter.patch('/:id', async (c) => {
     })
     .where(eq(sessions.id, session.id))
     .run()
+
+  for (const org of input.organizers ?? []) {
+    db.insert(sessionOrganizers)
+      .values({
+        id: nanoid(12),
+        sessionId: session.id,
+        organizationId: org.organizationId,
+      })
+      .run()
+  }
 
   return c.json(getSessionOr404(session.id))
 })
@@ -143,6 +188,24 @@ sessionsRouter.get('/:id/speakers', (c) => {
     .from(sessionSpeakers)
     .innerJoin(participants, eq(sessionSpeakers.participantId, participants.id))
     .where(eq(sessionSpeakers.sessionId, session.id))
+    .all()
+  return c.json({ data: rows })
+})
+
+// 场次的主办方列表
+sessionsRouter.get('/:id/organizers', (c) => {
+  const session = getSessionOr404(c.req.param('id'))
+  const rows = db
+    .select({
+      id: sessionOrganizers.id,
+      sessionId: sessionOrganizers.sessionId,
+      organizationId: sessionOrganizers.organizationId,
+      organizationName: organizations.name,
+    })
+    .from(sessionOrganizers)
+    .innerJoin(organizations, eq(sessionOrganizers.organizationId, organizations.id))
+    .where(eq(sessionOrganizers.sessionId, session.id))
+    .orderBy(asc(sessionOrganizers.id))
     .all()
   return c.json({ data: rows })
 })
@@ -201,6 +264,44 @@ function getSpeakerRow(id: string) {
     .from(sessionSpeakers)
     .innerJoin(participants, eq(sessionSpeakers.participantId, participants.id))
     .where(eq(sessionSpeakers.id, id))
+    .get()
+}
+
+// 添加场次主办方
+sessionsRouter.post('/:id/organizers', async (c) => {
+  const session = getSessionOr404(c.req.param('id'))
+  const input = createSessionOrganizerSchema.parse(await c.req.json())
+  const organization = db
+    .select()
+    .from(organizations)
+    .where(eq(organizations.id, input.organizationId))
+    .get()
+  if (!organization) throw notFound('组织')
+  if (organization.meetingId !== session.meetingId) throw badRequest('组织不属于该会议')
+
+  const id = nanoid(12)
+  db.insert(sessionOrganizers)
+    .values({
+      id,
+      sessionId: session.id,
+      organizationId: input.organizationId,
+    })
+    .run()
+
+  return c.json(getOrganizerRow(id), 201)
+})
+
+function getOrganizerRow(id: string) {
+  return db
+    .select({
+      id: sessionOrganizers.id,
+      sessionId: sessionOrganizers.sessionId,
+      organizationId: sessionOrganizers.organizationId,
+      organizationName: organizations.name,
+    })
+    .from(sessionOrganizers)
+    .innerJoin(organizations, eq(sessionOrganizers.organizationId, organizations.id))
+    .where(eq(sessionOrganizers.id, id))
     .get()
 }
 

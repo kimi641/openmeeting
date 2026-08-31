@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Meeting, Session, SessionType, Speaker, Venue } from '../lib/api'
+import type { Meeting, Session, SessionOrganizer, SessionType, Speaker, Venue } from '../lib/api'
 import { Button } from './ui/button'
 import { DEFAULT_SESSION_TYPE, SESSION_TYPE, formatTime, typeStyle } from '../lib/utils'
 
@@ -91,6 +91,8 @@ interface ScheduleCalendarProps {
   venues: Venue[]
   sessions: Session[]
   speakersBySession: Record<string, Speaker[]>
+  /** 各场次的主办方（日历块上展示，带"主办："前缀） */
+  organizersBySession: Record<string, SessionOrganizer[]>
   /** 活动类型（含自定义，用于场次块配色与标签） */
   sessionTypes: SessionType[]
   /** 有冲突的场次 ID 集合（红色描边标记） */
@@ -110,6 +112,7 @@ export function ScheduleCalendar({
   venues,
   sessions,
   speakersBySession,
+  organizersBySession,
   sessionTypes,
   conflictSessionIds,
   onAddSession,
@@ -568,6 +571,7 @@ export function ScheduleCalendar({
                           session={s}
                           startMin={startMin}
                           speakers={speakersBySession[s.id] ?? []}
+                          organizers={organizersBySession[s.id] ?? []}
                           conflicted={conflictSessionIds.has(s.id)}
                           typeMap={typeMap}
                           onBeginDrag={(e, mode) => beginDrag(s, e, mode)}
@@ -593,6 +597,7 @@ export function ScheduleCalendar({
                       session={s}
                       startMin={startMin}
                       speakers={speakersBySession[s.id] ?? []}
+                      organizers={organizersBySession[s.id] ?? []}
                       conflicted={conflictSessionIds.has(s.id)}
                       typeMap={typeMap}
                       cross
@@ -654,6 +659,7 @@ function SessionBlock({
   session,
   startMin,
   speakers,
+  organizers,
   conflicted,
   typeMap,
   cross,
@@ -662,6 +668,7 @@ function SessionBlock({
   session: Session
   startMin: number
   speakers: Speaker[]
+  organizers: SessionOrganizer[]
   conflicted: boolean
   typeMap: Record<string, { label: string; color: string }>
   cross?: boolean
@@ -671,6 +678,7 @@ function SessionBlock({
   const rawH = ((minutesOf(session.endTime) - minutesOf(session.startTime)) / 60) * HOUR_H
   const height = Math.max(rawH, 22)
   const typeMeta = typeMap[session.type]
+  const organizerText = organizers.map((o) => o.organizationName).join('、')
 
   return (
     <div
@@ -684,6 +692,8 @@ function SessionBlock({
         ...typeStyle(typeMeta?.color ?? DEFAULT_SESSION_TYPE.color),
       }}
       title={`${formatTime(session.startTime)}–${formatTime(session.endTime)} ${session.title}${
+        organizerText ? ` · 主办：${organizerText}` : ''
+      }${
         speakers.length > 0 ? ` · ${speakers.map((sp) => sp.participantName).join('、')}` : ''
       }${conflicted ? '（存在冲突）' : ''}（点击编辑）`}
       onPointerDown={(e) => onBeginDrag(e, 'move')}
@@ -696,6 +706,9 @@ function SessionBlock({
         <div className="truncate text-[11px] opacity-70">
           {formatTime(session.startTime)}–{formatTime(session.endTime)}
         </div>
+      )}
+      {height >= 52 && organizerText && (
+        <div className="truncate text-[11px] opacity-70">主办：{organizerText}</div>
       )}
       {height >= 52 && speakers.length > 0 && (
         <div className="truncate text-[11px] opacity-70">

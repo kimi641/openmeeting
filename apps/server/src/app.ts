@@ -8,8 +8,10 @@ import authRoutes from './routes/auth'
 import meetingsRouter from './routes/meetings'
 import sessionsRouter from './routes/sessions'
 import sessionSpeakersRouter from './routes/sessionSpeakers'
+import sessionOrganizersRouter from './routes/sessionOrganizers'
 import sessionTypesRouter from './routes/sessionTypes'
 import venuesRouter from './routes/venues'
+import organizationsRouter from './routes/organizations'
 import participantsRouter from './routes/participants'
 import templatesRouter from './routes/templates'
 import { users } from './db/schema'
@@ -45,8 +47,10 @@ export function createApp(): Hono {
   app.route('/api/meetings', meetingsRouter)
   app.route('/api/sessions', sessionsRouter)
   app.route('/api/session-speakers', sessionSpeakersRouter)
+  app.route('/api/session-organizers', sessionOrganizersRouter)
   app.route('/api/session-types', sessionTypesRouter)
   app.route('/api/venues', venuesRouter)
+  app.route('/api/organizations', organizationsRouter)
   app.route('/api/participants', participantsRouter)
   app.route('/api/templates', templatesRouter)
 

@@ -4,6 +4,7 @@ import {
   api,
   type ListResult,
   type Meeting,
+  type Organization,
   type Participant,
   type Session,
   type SessionType,
@@ -13,12 +14,14 @@ import {
 import { Button } from './ui/button'
 import { Input } from './ui/form'
 import { cn, DEFAULT_SESSION_TYPE, formatTime, SESSION_TYPE, SPEAKER_ROLE, typeTagStyle } from '../lib/utils'
-import { useSessionTypes } from '../lib/hooks'
+import { useOrganizations, useSessionTypes } from '../lib/hooks'
 import { ParticipantDialog } from './dialogs/ParticipantDialog'
 import { VenueDialog } from './dialogs/VenueDialog'
 import { SessionTypeDialog } from './dialogs/SessionTypeDialog'
+import { OrganizationDialog } from './dialogs/OrganizationDialog'
+import { OrganizationDetailDialog, ParticipantDetailDialog, VenueDetailDialog } from './dialogs/DetailDialogs'
 
-type Tab = 'schedule' | 'activities' | 'people' | 'venues'
+type Tab = 'schedule' | 'activities' | 'people' | 'orgs' | 'venues'
 
 /** 从当前路由提取会议 ID */
 function useMeetingId(): string | null {
@@ -54,9 +57,10 @@ export function RightPanel({ collapsed, onToggle }: RightPanelProps) {
     schedule: 'M4 5h16v13H4zM8 3v4M16 3v4M4 9h16',
     activities: 'M4 6h7v5H4zM13 6h7v5h-7zM4 13h7v5H4zM13 13h7v5h-7z',
     people: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1M16 3.5a4 4 0 0 1 0 7M22 21v-1a5 5 0 0 0-3.5-4.8',
+    orgs: 'M9 3h6v4H9zM12 7v4M6 11h12M6 11v6M18 11v6M3 17h6v4H3zM15 17h6v4h-6z',
     venues: 'M3 21V8l9-5 9 5v13M9 21v-6h6v6',
   }
-  const LABELS: Record<Tab, string> = { schedule: '日程', activities: '活动', people: '人员', venues: '场地' }
+  const LABELS: Record<Tab, string> = { schedule: '日程', activities: '活动', people: '人员', orgs: '组织', venues: '场地' }
 
   return (
     <aside className="flex w-80 shrink-0 border-l border-gray-200 bg-white">
@@ -94,6 +98,7 @@ export function RightPanel({ collapsed, onToggle }: RightPanelProps) {
         {tab === 'schedule' && <ScheduleTab meetingId={meetingId} />}
         {tab === 'activities' && <ActivitiesTab meetingId={meetingId} />}
         {tab === 'people' && <PeopleTab meetingId={meetingId} />}
+        {tab === 'orgs' && <OrganizationsTab meetingId={meetingId} />}
         {tab === 'venues' && <VenuesTab meetingId={meetingId} />}
       </div>
     </aside>
@@ -486,6 +491,10 @@ function PeopleTab({ meetingId }: { meetingId: string | null }) {
     open: false,
     participant: null,
   })
+  const [detail, setDetail] = useState<{ open: boolean; participant: Participant | null }>({
+    open: false,
+    participant: null,
+  })
 
   const load = useCallback(async () => {
     if (!meetingId) {
@@ -537,7 +546,8 @@ function PeopleTab({ meetingId }: { meetingId: string | null }) {
             {participants.map((p) => (
               <div
                 key={p.id}
-                className="group flex items-center justify-between rounded-md px-2 py-1.5 hover:bg-gray-50"
+                className="group flex cursor-pointer items-center justify-between rounded-md px-2 py-1.5 hover:bg-gray-50"
+                onClick={() => setDetail({ open: true, participant: p })}
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-gray-800">{p.name}</div>
@@ -548,7 +558,10 @@ function PeopleTab({ meetingId }: { meetingId: string | null }) {
                 <div className="ml-2 flex shrink-0 gap-0.5 opacity-0 group-hover:opacity-100">
                   <button
                     className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-700"
-                    onClick={() => setDialog({ open: true, participant: p })}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDialog({ open: true, participant: p })
+                    }}
                     title="编辑"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
@@ -557,7 +570,10 @@ function PeopleTab({ meetingId }: { meetingId: string | null }) {
                   </button>
                   <button
                     className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600"
-                    onClick={() => void remove(p)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void remove(p)
+                    }}
                     title="删除"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
@@ -580,6 +596,12 @@ function PeopleTab({ meetingId }: { meetingId: string | null }) {
           void load()
         }}
       />
+      <ParticipantDetailDialog
+        open={detail.open}
+        participant={detail.participant}
+        meetingId={meetingId}
+        onClose={() => setDetail({ open: false, participant: null })}
+      />
     </div>
   )
 }
@@ -590,6 +612,7 @@ function VenuesTab({ meetingId }: { meetingId: string | null }) {
   const [venues, setVenues] = useState<Venue[]>([])
   const [loading, setLoading] = useState(false)
   const [dialog, setDialog] = useState<{ open: boolean; venue: Venue | null }>({ open: false, venue: null })
+  const [detail, setDetail] = useState<{ open: boolean; venue: Venue | null }>({ open: false, venue: null })
 
   const load = useCallback(async () => {
     if (!meetingId) {
@@ -633,7 +656,8 @@ function VenuesTab({ meetingId }: { meetingId: string | null }) {
             {venues.map((v, i) => (
               <div
                 key={v.id}
-                className="group flex items-center justify-between rounded-md px-2 py-2 hover:bg-gray-50"
+                className="group flex cursor-pointer items-center justify-between rounded-md px-2 py-2 hover:bg-gray-50"
+                onClick={() => setDetail({ open: true, venue: v })}
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
@@ -647,7 +671,10 @@ function VenuesTab({ meetingId }: { meetingId: string | null }) {
                 <div className="ml-2 flex shrink-0 gap-0.5 opacity-0 group-hover:opacity-100">
                   <button
                     className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-700"
-                    onClick={() => setDialog({ open: true, venue: v })}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDialog({ open: true, venue: v })
+                    }}
                     title="编辑"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
@@ -656,7 +683,10 @@ function VenuesTab({ meetingId }: { meetingId: string | null }) {
                   </button>
                   <button
                     className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600"
-                    onClick={() => void remove(v)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void remove(v)
+                    }}
                     title="删除"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
@@ -678,6 +708,129 @@ function VenuesTab({ meetingId }: { meetingId: string | null }) {
           setDialog({ open: false, venue: null })
           void load()
         }}
+      />
+      <VenueDetailDialog
+        open={detail.open}
+        venue={detail.venue}
+        meetingId={meetingId}
+        onClose={() => setDetail({ open: false, venue: null })}
+      />
+    </div>
+  )
+}
+
+// ==================== 组织 Tab ====================
+
+function OrganizationsTab({ meetingId }: { meetingId: string | null }) {
+  const { types: organizations, reload } = useOrganizations(meetingId)
+  const [loading, setLoading] = useState(false)
+  const [dialog, setDialog] = useState<{ open: boolean; organization: Organization | null }>({
+    open: false,
+    organization: null,
+  })
+  const [detail, setDetail] = useState<{ open: boolean; organization: Organization | null }>({
+    open: false,
+    organization: null,
+  })
+
+  // 组织数据走 useOrganizations 共享缓存；load 仅包装加载态（reload 会同步通知详情页等使用方）
+  const load = useCallback(async () => {
+    if (!meetingId) return
+    setLoading(true)
+    try {
+      await reload()
+    } finally {
+      setLoading(false)
+    }
+  }, [meetingId, reload])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  async function remove(o: Organization) {
+    if (!window.confirm(`确定删除组织「${o.name}」？`)) return
+    await api.delete(`/organizations/${o.id}`)
+    void load()
+  }
+
+  if (!meetingId) return <EmptyHint text="请先打开一个会议" />
+  if (loading) return <EmptyHint text="加载中…" />
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-end border-b border-gray-100 px-2 py-2">
+        <Button
+          size="sm"
+          className="h-8 px-2 text-xs"
+          onClick={() => setDialog({ open: true, organization: null })}
+        >
+          + 新增组织
+        </Button>
+      </div>
+      <div className="flex-1 overflow-y-auto px-2">
+        {organizations.length === 0 ? (
+          <EmptyHint text="暂无组织" />
+        ) : (
+          <div className="space-y-0.5">
+            {organizations.map((o) => (
+              <div
+                key={o.id}
+                className="group flex cursor-pointer items-center justify-between rounded-md px-2 py-2 hover:bg-gray-50"
+                onClick={() => setDetail({ open: true, organization: o })}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-gray-800">{o.name}</div>
+                  <div className="truncate text-xs text-gray-400">
+                    {[o.contact, o.phone].filter(Boolean).join(' · ') || '—'}
+                  </div>
+                </div>
+                <div className="ml-2 flex shrink-0 gap-0.5 opacity-0 group-hover:opacity-100">
+                  <button
+                    className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-700"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDialog({ open: true, organization: o })
+                    }}
+                    title="编辑"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                      <path d="M4 20h4L20 8l-4-4L4 16v4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                  <button
+                    className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void remove(o)
+                    }}
+                    title="删除"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                      <path d="M4 7h16M9 7V5h6v2m-8 0l1 13h8l1-13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <OrganizationDialog
+        open={dialog.open}
+        organization={dialog.organization}
+        meetingId={meetingId}
+        onClose={() => setDialog({ open: false, organization: null })}
+        onSaved={() => {
+          setDialog({ open: false, organization: null })
+          void load()
+        }}
+      />
+      <OrganizationDetailDialog
+        open={detail.open}
+        organization={detail.organization}
+        meetingId={meetingId}
+        onClose={() => setDetail({ open: false, organization: null })}
       />
     </div>
   )
