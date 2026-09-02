@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "esbuild src/index.ts --bundle --format=esm --platform=node --target=node22 --outfile=dist/server.js --external:better-sqlite3",
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=node --target=node22 --outfile=dist/server.js --external:better-sqlite3 --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\"",
     "start": "node dist/server.js",
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit",
