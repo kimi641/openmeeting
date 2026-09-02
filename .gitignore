@@ -19,3 +19,9 @@ data/
 会议排程系统-PRD.md
 会议排程系统-技术方案与路线图.md
 
+# Trae IDE 本地目录
+.trae/
+
+# 本地 SQLite 运行数据
+*.sqlite
+
