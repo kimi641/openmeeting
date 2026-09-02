@@ -306,8 +306,9 @@ describe('会议与日程', () => {
     const after = await api('/api/meetings')
     expect(after.body.total).toBe(2)
 
+    // 会议已删除，其下属资源按无权限/不存在处理，统一返回 404
     const venuesAfter = await api(`/api/venues?meetingId=${last.id}`)
-    expect(venuesAfter.body.total).toBe(0)
+    expect(venuesAfter.status).toBe(404)
   })
 
   it('删除场地后场次解绑为未指定', async () => {
@@ -344,3 +345,339 @@ describe('登出', () => {
     expect(me.status).toBe(401)
   })
 })
+
+// ---------- 注册 / 用户数上限 / 数据隔离 / admin 用户管理 ----------
+
+/** 直接请求并捕获响应头（用于拿注册/登录 cookie），不带全局 cookie */
+async function rawRequest(
+  pathName: string,
+  init: RequestInit = {},
+): Promise<{ status: number; body: any; cookie?: string }> {
+  const res = await app.request(pathName, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init.headers as Record<string, string> | undefined) },
+  })
+  const body = await res.json().catch(() => null)
+  const setCookie = res.headers.get('set-cookie')
+  return { status: res.status, body, cookie: setCookie ? setCookie.split(';')[0] : undefined }
+}
+
+async function loginAs(username: string, password: string): Promise<string> {
+  const res = await rawRequest('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+  expect(res.status).toBe(200)
+  return res.cookie!
+}
+
+describe('注册与用户数上限', () => {
+  const alice = { username: 'alice', password: 'alice-pass-123' }
+  const bob = { username: 'bob', password: 'bob-pass-123' }
+  let aliceCookie = ''
+  let bobCookie = ''
+  let aliceId = ''
+
+  it('注册参数校验：非法用户名与过短密码返回 400', async () => {
+    const badName = await rawRequest('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'a b', password: 'alice-pass-123' }),
+    })
+    expect(badName.status).toBe(400)
+
+    const badPass = await rawRequest('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'carol', password: '123' }),
+    })
+    expect(badPass.status).toBe(400)
+  })
+
+  it('注册成功后立即可用（自动登录，role=member）', async () => {
+    const res = await rawRequest('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(alice),
+    })
+    expect(res.status).toBe(201)
+    expect(res.body).toMatchObject({ username: 'alice', role: 'member' })
+    expect(res.cookie).toContain('meeting_session=')
+    aliceCookie = res.cookie!
+
+    cookie = aliceCookie
+    const me = await api('/api/auth/me')
+    expect(me.status).toBe(200)
+    expect(me.body).toMatchObject({ username: 'alice', role: 'member' })
+    aliceId = me.body.id
+  })
+
+  it('重复用户名注册返回 409', async () => {
+    const res = await rawRequest('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(alice),
+    })
+    expect(res.status).toBe(409)
+    expect(res.body.error.code).toBe('USERNAME_TAKEN')
+  })
+
+  it('默认注册上限为 100，admin 可调整', async () => {
+    cookie = await loginAs('admin', 'test-password-123')
+    const settings = await api('/api/settings')
+    expect(settings.status).toBe(200)
+    expect(settings.body.registrationLimit).toBe(100)
+    expect(settings.body.userCount).toBe(2) // admin + alice
+
+    const patched = await api('/api/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ registrationLimit: 2 }),
+    })
+    expect(patched.status).toBe(200)
+    expect(patched.body.registrationLimit).toBe(2)
+  })
+
+  it('达到上限后注册被拒绝（403 REGISTRATION_CLOSED）', async () => {
+    const res = await rawRequest('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(bob),
+    })
+    expect(res.status).toBe(403)
+    expect(res.body.error.code).toBe('REGISTRATION_CLOSED')
+  })
+
+  it('上限校验：非法值（0/负数/小数）返回 400', async () => {
+    const bad = await api('/api/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ registrationLimit: 0 }),
+    })
+    expect(bad.status).toBe(400)
+  })
+
+  it('调高上限后可继续注册', async () => {
+    await api('/api/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ registrationLimit: 100 }),
+    })
+    const res = await rawRequest('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(bob),
+    })
+    expect(res.status).toBe(201)
+    bobCookie = res.cookie!
+  })
+
+  it('非 admin 访问用户管理/设置接口被拒绝', async () => {
+    cookie = bobCookie
+    const users = await api('/api/users')
+    expect(users.status).toBe(403)
+    const settings = await api('/api/settings')
+    expect(settings.status).toBe(403)
+  })
+})
+
+describe('数据隔离（member 仅见本人数据，admin 全量）', () => {
+  const alice = { username: 'alice', password: 'alice-pass-123' }
+  const bob = { username: 'bob', password: 'bob-pass-123' }
+  let meetingAId = ''
+  let venueAId = ''
+
+  it('alice 创建会议及下属资源', async () => {
+    cookie = await loginAs(alice.username, alice.password)
+
+    const meeting = await api('/api/meetings', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'alice 的私有会议',
+        startDate: '2026-10-01',
+        endDate: '2026-10-01',
+      }),
+    })
+    expect(meeting.status).toBe(201)
+    meetingAId = meeting.body.id
+
+    const venue = await api('/api/venues', {
+      method: 'POST',
+      body: JSON.stringify({ meetingId: meetingAId, name: '私有场地' }),
+    })
+    expect(venue.status).toBe(201)
+    venueAId = venue.body.id
+
+    const participant = await api('/api/participants', {
+      method: 'POST',
+      body: JSON.stringify({ meetingId: meetingAId, name: '私有嘉宾' }),
+    })
+    expect(participant.status).toBe(201)
+
+    const session = await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        meetingId: meetingAId,
+        venueId: venueAId,
+        title: '私有场次',
+        startTime: '2026-10-01T02:00:00.000Z',
+        endTime: '2026-10-01T03:00:00.000Z',
+      }),
+    })
+    expect(session.status).toBe(201)
+
+    const list = await api('/api/meetings')
+    expect(list.body.total).toBe(1)
+  })
+
+  it('bob 看不到 alice 的会议与下属资源（统一 404）', async () => {
+    cookie = await loginAs(bob.username, bob.password)
+
+    const list = await api('/api/meetings')
+    expect(list.status).toBe(200)
+    expect(list.body.total).toBe(0)
+
+    expect((await api(`/api/meetings/${meetingAId}`)).status).toBe(404)
+    expect((await api(`/api/meetings/${meetingAId}`, { method: 'PATCH', body: JSON.stringify({ name: '篡改' }) })).status).toBe(404)
+    expect((await api(`/api/meetings/${meetingAId}`, { method: 'DELETE' })).status).toBe(404)
+    expect((await api(`/api/venues?meetingId=${meetingAId}`)).status).toBe(404)
+    expect((await api(`/api/participants?meetingId=${meetingAId}`)).status).toBe(404)
+    expect((await api(`/api/organizations?meetingId=${meetingAId}`)).status).toBe(404)
+    expect((await api(`/api/session-types?meetingId=${meetingAId}`)).status).toBe(404)
+    expect(
+      (
+        await api('/api/sessions', {
+          method: 'POST',
+          body: JSON.stringify({
+            meetingId: meetingAId,
+            title: '越权场次',
+            startTime: '2026-10-01T04:00:00.000Z',
+            endTime: '2026-10-01T05:00:00.000Z',
+          }),
+        })
+      ).status,
+    ).toBe(404)
+    expect((await api(`/api/venues/${venueAId}`, { method: 'DELETE' })).status).toBe(404)
+  })
+
+  it('admin 可见全部会议与用户统计', async () => {
+    cookie = await loginAs('admin', 'test-password-123')
+
+    const list = await api('/api/meetings')
+    expect(list.body.total).toBe(3) // admin 原有 2 个 + alice 1 个
+
+    const detail = await api(`/api/meetings/${meetingAId}`)
+    expect(detail.status).toBe(200)
+
+    const users = await api('/api/users')
+    expect(users.status).toBe(200)
+    const aliceRow = users.body.data.find((u: any) => u.username === 'alice')
+    expect(aliceRow.meetingCount).toBe(1)
+  })
+})
+
+describe('admin 用户管理', () => {
+  const alice = { username: 'alice', password: 'alice-pass-123' }
+  const bob = { username: 'bob', password: 'bob-pass-123' }
+
+  async function findUser(username: string): Promise<any> {
+    const users = await api('/api/users')
+    return users.body.data.find((u: any) => u.username === username)
+  }
+
+  it('禁用 alice 后其会话失效且无法登录', async () => {
+    cookie = await loginAs('admin', 'test-password-123')
+    const aliceRow = await findUser(alice.username)
+
+    const dis = await api(`/api/users/${aliceRow.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ disabled: true }),
+    })
+    expect(dis.status).toBe(200)
+
+    const login = await rawRequest('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(alice),
+    })
+    expect(login.status).toBe(403)
+    expect(login.body.error.code).toBe('USER_DISABLED')
+
+    // 已有会话被强制失效
+    cookie = ''
+    const me = await rawRequest('/api/auth/me')
+    expect(me.status).toBe(401)
+  })
+
+  it('重新启用 alice 后可登录', async () => {
+    cookie = await loginAs('admin', 'test-password-123')
+    const aliceRow = await findUser(alice.username)
+
+    const en = await api(`/api/users/${aliceRow.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ disabled: false }),
+    })
+    expect(en.status).toBe(200)
+
+    const login = await rawRequest('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(alice),
+    })
+    expect(login.status).toBe(200)
+  })
+
+  it('重置 bob 密码后旧密码失效、新密码可用', async () => {
+    cookie = await loginAs('admin', 'test-password-123')
+    const bobRow = await findUser(bob.username)
+
+    const reset = await api(`/api/users/${bobRow.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ password: 'bob-new-pass-456' }),
+    })
+    expect(reset.status).toBe(200)
+
+    const oldLogin = await rawRequest('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(bob),
+    })
+    expect(oldLogin.status).toBe(401)
+
+    const newLogin = await rawRequest('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: bob.username, password: 'bob-new-pass-456' }),
+    })
+    expect(newLogin.status).toBe(200)
+  })
+
+  it('admin 不能禁用或删除自己', async () => {
+    cookie = await loginAs('admin', 'test-password-123')
+    const adminRow = await findUser('admin')
+
+    const dis = await api(`/api/users/${adminRow.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ disabled: true }),
+    })
+    expect(dis.status).toBe(400)
+
+    const del = await api(`/api/users/${adminRow.id}`, { method: 'DELETE' })
+    expect(del.status).toBe(400)
+  })
+
+  it('删除用户会连同其名下会议一起删除', async () => {
+    cookie = await loginAs('admin', 'test-password-123')
+    const bobRow = await findUser(bob.username)
+    const aliceRow = await findUser(alice.username)
+
+    const delBob = await api(`/api/users/${bobRow.id}`, { method: 'DELETE' })
+    expect(delBob.status).toBe(200)
+
+    const users = await api('/api/users')
+    expect(users.body.data.some((u: any) => u.username === 'bob')).toBe(false)
+
+    const delAlice = await api(`/api/users/${aliceRow.id}`, { method: 'DELETE' })
+    expect(delAlice.status).toBe(200)
+
+    // alice 名下会议已级联删除，admin 会议数回到原有 2 个
+    const list = await api('/api/meetings')
+    expect(list.body.total).toBe(2)
+  })
+
+  it('被删除用户无法登录', async () => {
+    const login = await rawRequest('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(alice),
+    })
+    expect(login.status).toBe(401)
+  })
+})
+

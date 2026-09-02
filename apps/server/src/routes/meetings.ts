@@ -13,19 +13,13 @@ import {
 import { db } from '../db'
 import { meetings, organizations, participants, sessionOrganizers, sessionSpeakers, sessionTypes, sessions, venues } from '../db/schema'
 import { requireAuth, type AppEnv } from '../lib/auth'
-import { notFound } from '../lib/http'
+import { getAccessibleMeeting, meetingScope } from '../lib/access'
 import { applyTemplate } from '../db/templates'
 
 const meetingsRouter = new Hono<AppEnv>()
 meetingsRouter.use('*', requireAuth)
 
-function getMeetingOr404(id: string) {
-  const meeting = db.select().from(meetings).where(eq(meetings.id, id)).get()
-  if (!meeting) throw notFound('会议')
-  return meeting
-}
-
-// 会议列表：?status=&keyword=&page=&pageSize=
+// 会议列表：?status=&keyword=&page=&pageSize=（member 仅返回本人创建的会议）
 meetingsRouter.get('/', (c) => {
   const page = Math.max(1, Number(c.req.query('page') ?? 1) || 1)
   const pageSize = Math.min(100, Math.max(1, Number(c.req.query('pageSize') ?? 20) || 20))
@@ -44,6 +38,8 @@ meetingsRouter.get('/', (c) => {
   if (keyword) {
     conditions.push(or(like(meetings.name, `%${keyword}%`), like(meetings.location, `%${keyword}%`))!)
   }
+  const scope = meetingScope(c.get('user'))
+  if (scope) conditions.push(scope)
   const where = conditions.length > 0 ? and(...conditions) : undefined
 
   const total = db.select({ n: count() }).from(meetings).where(where).get()?.n ?? 0
@@ -84,12 +80,12 @@ meetingsRouter.post('/', async (c) => {
     applyTemplate(input.templateId, id, input.startDate)
   }
 
-  return c.json(getMeetingOr404(id), 201)
+  return c.json(getAccessibleMeeting(c.get('user'), id), 201)
 })
 
 // 会议详情 + 统计
 meetingsRouter.get('/:id', (c) => {
-  const meeting = getMeetingOr404(c.req.param('id'))
+  const meeting = getAccessibleMeeting(c.get('user'), c.req.param('id'))
   const sessionCount =
     db.select({ n: count() }).from(sessions).where(eq(sessions.meetingId, meeting.id)).get()?.n ?? 0
   return c.json({ ...meeting, stats: { sessions: sessionCount } })
@@ -97,7 +93,7 @@ meetingsRouter.get('/:id', (c) => {
 
 // 更新会议基本信息
 meetingsRouter.patch('/:id', async (c) => {
-  const meeting = getMeetingOr404(c.req.param('id'))
+  const meeting = getAccessibleMeeting(c.get('user'), c.req.param('id'))
   const input = updateMeetingSchema.parse(await c.req.json())
 
   db.update(meetings)
@@ -112,19 +108,19 @@ meetingsRouter.patch('/:id', async (c) => {
     .where(eq(meetings.id, meeting.id))
     .run()
 
-  return c.json(getMeetingOr404(meeting.id))
+  return c.json(getAccessibleMeeting(c.get('user'), meeting.id))
 })
 
 // 删除会议（级联删除 tracks/sessions/speakers/materials 记录）
 meetingsRouter.delete('/:id', (c) => {
-  const meeting = getMeetingOr404(c.req.param('id'))
+  const meeting = getAccessibleMeeting(c.get('user'), c.req.param('id'))
   db.delete(meetings).where(eq(meetings.id, meeting.id)).run()
   return c.json({ ok: true })
 })
 
 // 状态流转（draft/published/ongoing/finished 任意互转，全部手动切换）
 meetingsRouter.post('/:id/status', async (c) => {
-  const meeting = getMeetingOr404(c.req.param('id'))
+  const meeting = getAccessibleMeeting(c.get('user'), c.req.param('id'))
   const { status } = meetingStatusSchema.parse(await c.req.json())
 
   db.update(meetings)
@@ -132,12 +128,12 @@ meetingsRouter.post('/:id/status', async (c) => {
     .where(eq(meetings.id, meeting.id))
     .run()
 
-  return c.json(getMeetingOr404(meeting.id))
+  return c.json(getAccessibleMeeting(c.get('user'), meeting.id))
 })
 
 // 复制会议：复制场地与场次骨架（标题/类型/起止时间/场地/简介/排序号/全体环节标记；不含嘉宾）
 meetingsRouter.post('/:id/duplicate', (c) => {
-  const meeting = getMeetingOr404(c.req.param('id'))
+  const meeting = getAccessibleMeeting(c.get('user'), c.req.param('id'))
   const now = new Date().toISOString()
   const newId = nanoid(12)
 
@@ -200,12 +196,12 @@ meetingsRouter.post('/:id/duplicate', (c) => {
     }
   })
 
-  return c.json(getMeetingOr404(newId), 201)
+  return c.json(getAccessibleMeeting(c.get('user'), newId), 201)
 })
 
 // 冲突检测（实时计算，仅警告不阻断保存；场地/人员为会议级资源，检测范围为本会议）
 meetingsRouter.get('/:id/conflicts', (c) => {
-  const meeting = getMeetingOr404(c.req.param('id'))
+  const meeting = getAccessibleMeeting(c.get('user'), c.req.param('id'))
 
   const mySessions = db
     .select({
@@ -276,7 +272,7 @@ function localTime(iso: string): string {
 
 // 导出日程表 .xlsx：矩阵式布局 —— 横轴场地、纵轴时间，单元格为场次标题+副标题（类型/嘉宾）
 meetingsRouter.get('/:id/export/schedule.xlsx', async (c) => {
-  const meeting = getMeetingOr404(c.req.param('id'))
+  const meeting = getAccessibleMeeting(c.get('user'), c.req.param('id'))
 
   // 日历中隐藏的场地（前端按天存储 Record<日期, 场地ID[]>，按天应用，不影响其他日期的日程）
   let hiddenVenues: Record<string, string[]> = {}

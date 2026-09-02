@@ -4,15 +4,9 @@ import { updateSpeakerSchema } from '@meeting/shared'
 import { db } from '../db'
 import { participants, sessionSpeakers } from '../db/schema'
 import { requireAuth, type AppEnv } from '../lib/auth'
-import { notFound } from '../lib/http'
+import { getAccessibleSpeaker } from '../lib/access'
 
 const sessionSpeakersRouter = new Hono<AppEnv>()
-
-function getSpeakerOr404(id: string) {
-  const row = db.select().from(sessionSpeakers).where(eq(sessionSpeakers.id, id)).get()
-  if (!row) throw notFound('场次嘉宾')
-  return row
-}
 
 function speakerWithParticipant(id: string) {
   return db
@@ -32,7 +26,7 @@ function speakerWithParticipant(id: string) {
 
 // 更新嘉宾（角色 / 确认状态）
 sessionSpeakersRouter.patch('/:id', requireAuth, async (c) => {
-  const existing = getSpeakerOr404(c.req.param('id'))
+  const existing = getAccessibleSpeaker(c.get('user'), c.req.param('id'))
   const input = updateSpeakerSchema.parse(await c.req.json())
 
   db.update(sessionSpeakers)
@@ -48,7 +42,7 @@ sessionSpeakersRouter.patch('/:id', requireAuth, async (c) => {
 
 // 移除嘉宾
 sessionSpeakersRouter.delete('/:id', requireAuth, (c) => {
-  const existing = getSpeakerOr404(c.req.param('id'))
+  const existing = getAccessibleSpeaker(c.get('user'), c.req.param('id'))
   db.delete(sessionSpeakers).where(eq(sessionSpeakers.id, existing.id)).run()
   return c.json({ ok: true })
 })

@@ -2,9 +2,12 @@ import { Hono } from 'hono'
 import { ZodError } from 'zod'
 import { runMigrations, db } from './db'
 import { ensureAdminUser } from './lib/auth'
+import { ensureDefaultSettings } from './lib/settings'
 import { ApiError } from './lib/http'
 import { seedTemplates } from './db/templates'
 import authRoutes from './routes/auth'
+import usersRouter from './routes/users'
+import settingsRouter from './routes/settings'
 import meetingsRouter from './routes/meetings'
 import sessionsRouter from './routes/sessions'
 import sessionSpeakersRouter from './routes/sessionSpeakers'
@@ -44,6 +47,8 @@ export function createApp(): Hono {
   app.get('/api/health', (c) => c.json({ ok: true, version: '0.1.0' }))
 
   app.route('/api/auth', authRoutes)
+  app.route('/api/users', usersRouter)
+  app.route('/api/settings', settingsRouter)
   app.route('/api/meetings', meetingsRouter)
   app.route('/api/sessions', sessionsRouter)
   app.route('/api/session-speakers', sessionSpeakersRouter)
@@ -57,6 +62,7 @@ export function createApp(): Hono {
   // 启动初始化
   runMigrations()
   ensureAdminUser()
+  ensureDefaultSettings()
   seedTemplates()
 
   return app

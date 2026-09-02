@@ -1,11 +1,12 @@
-import { asc, eq, max } from 'drizzle-orm'
+import { and, asc, eq, max } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { nanoid } from 'nanoid'
 import { createSessionTypeSchema, updateSessionTypeSchema } from '@meeting/shared'
 import { db } from '../db'
-import { meetings, sessionTypes, sessions } from '../db/schema'
+import { sessionTypes, sessions } from '../db/schema'
 import { requireAuth, type AppEnv } from '../lib/auth'
-import { badRequest, notFound, ApiError } from '../lib/http'
+import { getAccessibleMeeting, getAccessibleSessionType } from '../lib/access'
+import { badRequest, ApiError } from '../lib/http'
 
 const sessionTypesRouter = new Hono<AppEnv>()
 sessionTypesRouter.use('*', requireAuth)
@@ -21,18 +22,11 @@ const BUILTIN_TYPES: { key: string; name: string; color: string }[] = [
 ]
 const BUILTIN_KEYS = new Set(BUILTIN_TYPES.map((t) => t.key))
 
-function getSessionTypeOr404(id: string) {
-  const row = db.select().from(sessionTypes).where(eq(sessionTypes.id, id)).get()
-  if (!row) throw notFound('活动类型')
-  return row
-}
-
 // 会议的全部活动类型（首次访问惰性 seed 内置类型，兼容存量会议）
 sessionTypesRouter.get('/', (c) => {
   const meetingId = c.req.query('meetingId')
   if (!meetingId) throw badRequest('缺少会议 ID（meetingId）')
-  const meeting = db.select().from(meetings).where(eq(meetings.id, meetingId)).get()
-  if (!meeting) throw notFound('会议')
+  getAccessibleMeeting(c.get('user'), meetingId)
 
   let data = db
     .select()
@@ -65,8 +59,7 @@ sessionTypesRouter.post('/', async (c) => {
   const body = await c.req.json()
   const input = createSessionTypeSchema.parse(body)
   const meetingId = String(body?.meetingId ?? '')
-  const meeting = db.select().from(meetings).where(eq(meetings.id, meetingId)).get()
-  if (!meeting) throw notFound('会议')
+  getAccessibleMeeting(c.get('user'), meetingId)
 
   const currentMax = db
     .select({ m: max(sessionTypes.sortOrder) })
@@ -86,12 +79,12 @@ sessionTypesRouter.post('/', async (c) => {
       sortOrder: (currentMax ?? -1) + 1,
     })
     .run()
-  return c.json(getSessionTypeOr404(id), 201)
+  return c.json(getAccessibleSessionType(c.get('user'), id), 201)
 })
 
 // 更新活动类型（改名/改色/排序）
 sessionTypesRouter.patch('/:id', async (c) => {
-  const row = getSessionTypeOr404(c.req.param('id'))
+  const row = getAccessibleSessionType(c.get('user'), c.req.param('id'))
   const input = updateSessionTypeSchema.parse(await c.req.json())
   db.update(sessionTypes)
     .set({
@@ -101,19 +94,19 @@ sessionTypesRouter.patch('/:id', async (c) => {
     })
     .where(eq(sessionTypes.id, row.id))
     .run()
-  return c.json(getSessionTypeOr404(row.id))
+  return c.json(getAccessibleSessionType(c.get('user'), row.id))
 })
 
 // 删除活动类型（内置类型不可删；自定义类型被场次引用时拒绝）
 sessionTypesRouter.delete('/:id', (c) => {
-  const row = getSessionTypeOr404(c.req.param('id'))
+  const row = getAccessibleSessionType(c.get('user'), c.req.param('id'))
   if (BUILTIN_KEYS.has(row.key)) {
     throw new ApiError(409, 'CONFLICT', '内置类型不可删除，仅可修改名称或颜色')
   }
   const used = db
     .select({ id: sessions.id })
     .from(sessions)
-    .where(eq(sessions.type, row.key))
+    .where(and(eq(sessions.type, row.key), eq(sessions.meetingId, row.meetingId)))
     .limit(1)
     .all()
   if (used.length > 0) {

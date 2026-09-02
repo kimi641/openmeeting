@@ -43,6 +43,37 @@ export const loginSchema = z.object({
 })
 export type LoginInput = z.infer<typeof loginSchema>
 
+// ---------- 注册与用户管理 ----------
+
+/** 公开注册：用户名 2-32 位（中文/字母/数字/下划线/中划线），密码 6-200 位 */
+export const registerSchema = z.object({
+  username: z
+    .string()
+    .trim()
+    .min(2, '用户名至少 2 个字符')
+    .max(32, '用户名最多 32 个字符')
+    .regex(/^[A-Za-z0-9_\-\u4e00-\u9fa5]+$/, '用户名仅支持中文、字母、数字、下划线和中划线'),
+  password: z.string().min(6, '密码至少 6 位').max(200, '密码最多 200 位'),
+})
+export type RegisterInput = z.infer<typeof registerSchema>
+
+/** admin 用户管理：禁用/启用、重置密码（可单独或同时提供） */
+export const adminUpdateUserSchema = z
+  .object({
+    disabled: z.boolean().optional(),
+    password: z.string().min(6, '密码至少 6 位').max(200, '密码最多 200 位').optional(),
+  })
+  .refine((v) => v.disabled !== undefined || v.password !== undefined, {
+    message: '没有可更新的字段',
+  })
+export type AdminUpdateUserInput = z.infer<typeof adminUpdateUserSchema>
+
+/** 系统设置：注册用户数上限（admin 可调） */
+export const updateSettingsSchema = z.object({
+  registrationLimit: z.number().int('注册上限应为整数').min(1, '注册上限至少为 1').max(100000, '注册上限过大'),
+})
+export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>
+
 // ---------- 会议 ----------
 
 export const createMeetingSchema = z.object({

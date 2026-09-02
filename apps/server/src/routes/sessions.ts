@@ -10,7 +10,6 @@ import {
 } from '@meeting/shared'
 import { db } from '../db'
 import {
-  meetings,
   organizations,
   participants,
   sessionOrganizers,
@@ -19,16 +18,11 @@ import {
   venues,
 } from '../db/schema'
 import { requireAuth, type AppEnv } from '../lib/auth'
+import { getAccessibleMeeting, getAccessibleSession } from '../lib/access'
 import { badRequest, notFound } from '../lib/http'
 
 const sessionsRouter = new Hono<AppEnv>()
 sessionsRouter.use('*', requireAuth)
-
-function getSessionOr404(id: string) {
-  const session = db.select().from(sessions).where(eq(sessions.id, id)).get()
-  if (!session) throw notFound('场次')
-  return session
-}
 
 /** 校验场地存在且属于指定会议 */
 function getVenueOfMeetingOr404(venueId: string, meetingId: string) {
@@ -42,6 +36,7 @@ function getVenueOfMeetingOr404(venueId: string, meetingId: string) {
 sessionsRouter.get('/', (c) => {
   const meetingId = c.req.query('meetingId')
   if (!meetingId) throw notFound('会议')
+  getAccessibleMeeting(c.get('user'), meetingId)
   const rows = db
     .select()
     .from(sessions)
@@ -56,8 +51,7 @@ sessionsRouter.post('/', async (c) => {
   const body = await c.req.json()
   const input = createSessionSchema.parse(body)
   const meetingId = String(body?.meetingId ?? '')
-  const meeting = db.select().from(meetings).where(eq(meetings.id, meetingId)).get()
-  if (!meeting) throw notFound('会议')
+  const meeting = getAccessibleMeeting(c.get('user'), meetingId)
   if (input.venueId) getVenueOfMeetingOr404(input.venueId, meeting.id)
 
   if (input.speakers) {
@@ -122,12 +116,12 @@ sessionsRouter.post('/', async (c) => {
     }
   })
 
-  return c.json(db.select().from(sessions).where(eq(sessions.id, id)).get(), 201)
+  return c.json(getAccessibleSession(c.get('user'), id), 201)
 })
 
 // 更新场次
 sessionsRouter.patch('/:id', async (c) => {
-  const session = getSessionOr404(c.req.param('id'))
+  const session = getAccessibleSession(c.get('user'), c.req.param('id'))
   const input = updateSessionSchema.parse(await c.req.json())
   if (input.venueId) getVenueOfMeetingOr404(input.venueId, session.meetingId)
 
@@ -163,19 +157,19 @@ sessionsRouter.patch('/:id', async (c) => {
       .run()
   }
 
-  return c.json(getSessionOr404(session.id))
+  return c.json(getAccessibleSession(c.get('user'), session.id))
 })
 
 // 删除场次（级联删除嘉宾关联与材料关联）
 sessionsRouter.delete('/:id', (c) => {
-  const session = getSessionOr404(c.req.param('id'))
+  const session = getAccessibleSession(c.get('user'), c.req.param('id'))
   db.delete(sessions).where(eq(sessions.id, session.id)).run()
   return c.json({ ok: true })
 })
 
 // 场次的嘉宾列表
 sessionsRouter.get('/:id/speakers', (c) => {
-  const session = getSessionOr404(c.req.param('id'))
+  const session = getAccessibleSession(c.get('user'), c.req.param('id'))
   const rows = db
     .select({
       id: sessionSpeakers.id,
@@ -194,7 +188,7 @@ sessionsRouter.get('/:id/speakers', (c) => {
 
 // 场次的主办方列表
 sessionsRouter.get('/:id/organizers', (c) => {
-  const session = getSessionOr404(c.req.param('id'))
+  const session = getAccessibleSession(c.get('user'), c.req.param('id'))
   const rows = db
     .select({
       id: sessionOrganizers.id,
@@ -212,7 +206,7 @@ sessionsRouter.get('/:id/organizers', (c) => {
 
 // 拖拽落点保存：换场地 / 改时间 / 改排序，落定即保存（冲突仅警告不阻断）
 sessionsRouter.post('/:id/move', async (c) => {
-  const session = getSessionOr404(c.req.param('id'))
+  const session = getAccessibleSession(c.get('user'), c.req.param('id'))
   const input = moveSessionSchema.parse(await c.req.json())
   if (input.venueId) getVenueOfMeetingOr404(input.venueId, session.meetingId)
 
@@ -226,12 +220,12 @@ sessionsRouter.post('/:id/move', async (c) => {
     .where(eq(sessions.id, session.id))
     .run()
 
-  return c.json(getSessionOr404(session.id))
+  return c.json(getAccessibleSession(c.get('user'), session.id))
 })
 
 // 添加场次嘉宾
 sessionsRouter.post('/:id/speakers', async (c) => {
-  const session = getSessionOr404(c.req.param('id'))
+  const session = getAccessibleSession(c.get('user'), c.req.param('id'))
   const input = addSpeakerSchema.parse(await c.req.json())
   const participant = db.select().from(participants).where(eq(participants.id, input.participantId)).get()
   if (!participant) throw notFound('人员')
@@ -269,7 +263,7 @@ function getSpeakerRow(id: string) {
 
 // 添加场次主办方
 sessionsRouter.post('/:id/organizers', async (c) => {
-  const session = getSessionOr404(c.req.param('id'))
+  const session = getAccessibleSession(c.get('user'), c.req.param('id'))
   const input = createSessionOrganizerSchema.parse(await c.req.json())
   const organization = db
     .select()

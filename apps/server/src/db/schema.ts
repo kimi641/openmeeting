@@ -213,6 +213,14 @@ export const templates = sqliteTable('templates', {
   createdAt: text('created_at').notNull(),
 })
 
+// ---------- 系统设置 ----------
+
+export const settings = sqliteTable('settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
 // ---------- LLM 端点（占位）与审计 ----------
 
 export const llmEndpoints = sqliteTable('llm_endpoints', {
