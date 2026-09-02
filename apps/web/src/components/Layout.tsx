@@ -4,10 +4,11 @@ import { api, type User } from '../lib/api'
 import { cn } from '../lib/utils'
 import { RightPanel } from './RightPanel'
 
-// n8n 风格：左侧窄图标栏，仅保留仪表盘 / 会议 / 设置
+// n8n 风格：左侧窄图标栏，仅保留仪表盘 / 会议 / 用户管理（admin）/ 设置
 const NAV = [
   { to: '/', label: '仪表盘', icon: 'M3 10.5 10 4l7 6.5V20h-4v-5h-6v5H3z' },
   { to: '/meetings', label: '会议', icon: 'M4 5h16v13H4zM8 3v4M16 3v4M4 9h16' },
+  { to: '/admin/users', label: '用户管理', adminOnly: true, icon: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75' },
   { to: '/settings', label: '设置', icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM4 12l-1.5-2 1-2.5L6 7l2-2 .5-3L11 3l2.5-1L16 4l3 .5.5 3 2 2-1 2.5 1 2.5-2 2-.5 3-3 .5-2 2-2.5-1-2.5 1-2-2-3-.5-1-2.5z' },
 ]
 
@@ -45,7 +46,7 @@ export function Layout() {
           </div>
         </div>
         <nav className="flex-1 space-y-1 py-2">
-          {NAV.map((n) => (
+          {NAV.filter((n) => !n.adminOnly || user?.role === 'admin').map((n) => (
             <NavLink
               key={n.to}
               to={n.to}

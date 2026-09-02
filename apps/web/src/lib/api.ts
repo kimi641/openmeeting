@@ -46,6 +46,22 @@ export interface User {
   role: 'admin' | 'member'
 }
 
+/** admin 用户管理列表项（含注册时间与名下会议数） */
+export interface AdminUser {
+  id: string
+  username: string
+  role: 'admin' | 'member'
+  disabled: boolean
+  createdAt: string
+  meetingCount: number
+}
+
+/** 系统设置（admin） */
+export interface Settings {
+  registrationLimit: number
+  userCount: number
+}
+
 export interface Meeting {
   id: string
   name: string

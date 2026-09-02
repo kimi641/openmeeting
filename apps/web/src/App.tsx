@@ -5,6 +5,7 @@ import { DashboardPage } from './pages/Dashboard'
 import { MeetingsPage } from './pages/Meetings'
 import { MeetingDetailPage } from './pages/MeetingDetail'
 import { SettingsPage } from './pages/Settings'
+import { AdminUsersPage } from './pages/AdminUsers'
 import { PrintSchedulePage } from './pages/PrintSchedule'
 
 const router = createBrowserRouter([
@@ -18,6 +19,7 @@ const router = createBrowserRouter([
       { index: true, element: <DashboardPage /> },
       { path: 'meetings', element: <MeetingsPage /> },
       { path: 'meetings/:id', element: <MeetingDetailPage /> },
+      { path: 'admin/users', element: <AdminUsersPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],
   },
